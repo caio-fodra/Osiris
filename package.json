@@ -17,10 +17,13 @@
     "db:reset:seeded": "node scripts/reset.mjs --seeded-only",
     "backup": "wrangler d1 export osiris-db --remote --output osiris-backup.sql -c apps/bot/wrangler.jsonc",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "prettier": "^3.9.6",
+    "vitest": "^4.1.11",
     "wrangler": "^4.127.1"
   }
 }
