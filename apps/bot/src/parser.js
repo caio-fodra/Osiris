@@ -72,7 +72,7 @@ export const rotulo = (m) => (Object.hasOwn(LABEL, m ?? '') ? LABEL[m] : null);
 
 // Dia 0 do mes seguinte = ultimo dia deste mes. Ano bissexto sai de graca, sem tabela de dias por
 // mes.
-const ultimoDia = (ano, mes) => new Date(Date.UTC(+ano, mes, 0)).getUTCDate();
+export const ultimoDia = (ano, mes) => new Date(Date.UTC(+ano, mes, 0)).getUTCDate();
 
 /* '12' + '8' + '2026' -> '2026-08-12', ou null se o dia nao existe no calendario. Devolver null e
    proposital: */

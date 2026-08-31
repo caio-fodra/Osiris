@@ -1,5 +1,6 @@
 import { rotulo } from './parser.js';
 import { brl, bloco } from './fmt.js';
+import { celulaTeto } from './orcamento.js';
 
 const MES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 
@@ -48,11 +49,12 @@ export async function relatorio(env, ym) {
 	const { results: cats } = await env.DB.prepare(
 		`
     select coalesce(c.name, 'Sem categoria') as nome,
+           c.budget_cents as teto,
            sum(t.amount_cents) as v
     from transactions t
     left join categories c on c.id = t.category_id
     where t.occurred_on like ?
-    group by t.category_id
+    group by t.category_id, c.budget_cents
     order by v desc
   `,
 	)
@@ -74,12 +76,15 @@ export async function relatorio(env, ym) {
 	// Largura unica pras duas tabelas: a maior categoria, com piso de 12 pra caber 'Sem método' sem
 	// torcer a coluna.
 	const larg = Math.max(...cats.map((c) => c.nome.length), 12);
-	const linha = (nome, v) => `${nome.padEnd(larg)}  ${brl(v).padStart(10)}  ${String(Math.round((v / total) * 100)).padStart(3)}%`;
+	// A coluna 'teto' so e preenchida acima de 80% (celulaTeto decide). Duas colunas de porcentagem
+	// lado a lado.
+	const linha = (nome, v, teto) =>
+		`${nome.padEnd(larg)}  ${brl(v).padStart(10)}  ${String(Math.round((v / total) * 100)).padStart(3)}%  ${celulaTeto(v, teto).padStart(4)}`.trimEnd();
 
 	const out = [
 		`${nomeMes(ym)} — R$ ${brl(total)}`,
 		'',
-		...cats.map((c) => linha(c.nome, c.v)),
+		...cats.map((c) => linha(c.nome, c.v, c.teto)),
 		'',
 		...pags.map((p) => `${(rotulo(p.m) ?? 'Sem método').padEnd(larg)}  ${brl(p.v).padStart(10)}`),
 	];

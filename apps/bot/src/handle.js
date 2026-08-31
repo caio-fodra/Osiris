@@ -1,6 +1,7 @@
 import { parse, centavos, norm, LABEL, isMetodo, rotulo } from './parser.js';
-import { brl, dia } from './fmt.js';
+import { brl, dia, bloco } from './fmt.js';
 import { relatorio, resolveMes } from './report.js';
+import { estadoDaCategoria, tabelaOrcamentos, linhaEstado, avisoEstouro, linhasDoOrcamento } from './orcamento.js';
 
 const API = (t) => `https://api.telegram.org/bot${t}`;
 
@@ -91,6 +92,9 @@ function keywordDe(desc) {
 
 // Uma linha so, igual na confirmacao e depois de cada botao, pra o usuario ver sempre o estado
 // atual da transacao.
+/* A confirmacao inteira: o resumo de sempre, mais a linha de orcamento quando ha o que dizer. */
+const corpo = (cents, estado, method, iso) => [resumo(cents, estado?.nome, method, iso), linhaEstado(estado)].filter(Boolean).join('\n');
+
 function resumo(cents, catNome, method, iso) {
 	return `R$ ${brl(cents)} · ${catNome ?? 'sem categoria'}` + ` · ${rotulo(method) ?? 'sem método'} · ${dia(iso)}`;
 }
@@ -179,13 +183,16 @@ async function onMessage(msg, env, updateId) {
 	if (mOrc) {
 		const arg = mOrc[1]?.trim();
 
-		if (!arg) {
-			const { results } = await env.DB.prepare('select name, budget_cents from categories order by name').all();
+		// Sem argumento, ou com um argumento que e mes ('anterior', 'passado', '7'): tabela de gasto
+		// contra teto.
+		const soMes = !arg || /^(anterior|passado|0?[1-9]|1[0-2])$/i.test(arg);
+		if (soMes) {
+			const ym = resolveMes(arg ?? '', hoje);
+			const cats = await tabelaOrcamentos(env, ym);
 			await tg(env, 'sendMessage', {
 				chat_id: msg.chat.id,
-				text: results.length
-					? results.map((c) => `${c.name}: ${c.budget_cents ? `R$ ${brl(c.budget_cents)}` : 'sem orçamento'}`).join('\n')
-					: 'Nenhuma categoria ainda. Crie com: /categoria mercado',
+				text: cats.length ? bloco(linhasDoOrcamento(cats, ym, hoje)) : 'Nenhuma categoria ainda. Crie com: /categoria mercado',
+				parse_mode: cats.length ? 'MarkdownV2' : undefined,
 			});
 			return;
 		}
@@ -242,6 +249,7 @@ async function onMessage(msg, env, updateId) {
 				'Para criar uma categoria use /categoria <nome>\n' +
 				'Para listar categorias use /categorias\n' +
 				'Para definir um teto mensal use /orcamento <categoria> <valor>\n' +
+				'Use /orcamento sozinho para ver gasto x teto de cada categoria.\n' +
 				'Use /relatorio para ver o resumo do mês.',
 		});
 		return;
@@ -275,16 +283,23 @@ async function onMessage(msg, env, updateId) {
 	// Sem linha = o update ja tinha sido processado. Sair calado e o certo:
 	if (!row) return;
 
-	const cat = p.category_id ? await env.DB.prepare('select name from categories where id = ?').bind(p.category_id).first() : null;
+	// Uma consulta no lugar da busca de nome que morava aqui: ela ja devolve o teto e o gasto do mes
+	// junto, entao a linha de orcamento na confirmacao e o aviso de estouro saem sem nenhum round trip
+	// a mais no caminho quente.
+	const estado = await estadoDaCategoria(env, p.category_id, p.occurred_on.slice(0, 7));
 
 	// So busca as categorias se ainda faltar uma.
 	const cats = p.category_id ? [] : await categoriasPorUso(env);
 
 	await tg(env, 'sendMessage', {
 		chat_id: msg.chat.id,
-		text: resumo(p.amount_cents, cat?.name, p.method, p.occurred_on),
+		text: corpo(p.amount_cents, estado, p.method, p.occurred_on),
 		reply_markup: { inline_keyboard: teclado(row.id, p.category_id, p.method, cats) },
 	});
+
+	// O aviso de estouro vai em mensagem separada.
+	const aviso = avisoEstouro(estado, p.amount_cents, p.occurred_on.slice(0, 7), hoje);
+	if (aviso) await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: aviso });
 }
 
 // Clique de botao volta como callback_query trazendo de volta o callback_data que teclado() montou:
@@ -326,9 +341,11 @@ async function onCallback(cb, env) {
 		tx.method = valor;
 	}
 
-	// Resolvida uma vez so: no ramo abaixo ela serve de validacao do callback_data, e no fim alimenta
-	// o resumo.
+	// Resolvida uma vez so: no ramo abaixo ela serve de validacao do callback_data.
 	let cat = null;
+	// Se este clique realmente moveu a transacao de categoria. Sai do meta.changes do UPDATE
+	// condicional, entao re-clique na mesma categoria nao conta.
+	let mudouCategoria = false;
 
 	if (acao === ACAO.CAT) {
 		// Mesma desconfianca do 'pay': o id da categoria vem do callback_data e pode ser forjado.
@@ -348,7 +365,9 @@ async function onCallback(cb, env) {
 		tx.category_id = cat.id;
 
 		// Aprende com a correcao: precisar clicar no botao significa que o parser errou.
-		if (upd.meta.changes === 1) {
+		mudouCategoria = upd.meta.changes === 1;
+
+		if (mudouCategoria) {
 			const kw = keywordDe(tx.description);
 			if (kw) {
 				await env.DB.prepare(
@@ -364,9 +383,10 @@ async function onCallback(cb, env) {
 		}
 	}
 
-	// Ja resolvido la em cima quando o clique foi no botao de categoria. Este ??= cobre o 'pay', que
-	// mexe so no metodo mas precisa reexibir a categoria que a transacao ja tinha.
-	cat ??= tx.category_id ? await env.DB.prepare('select name from categories where id = ?').bind(tx.category_id).first() : null;
+	// A mesma consulta do lancamento, e ela substitui a busca de nome que morava aqui: traz nome, teto
+	// e gasto do mes de uma vez.
+	const ym = tx.occurred_on.slice(0, 7);
+	const estado = await estadoDaCategoria(env, tx.category_id, ym);
 
 	const cats = tx.category_id ? [] : await categoriasPorUso(env);
 
@@ -374,9 +394,14 @@ async function onCallback(cb, env) {
 	await tg(env, 'editMessageText', {
 		chat_id: cb.message.chat.id,
 		message_id: cb.message.message_id,
-		text: resumo(tx.amount_cents, cat?.name, tx.method, tx.occurred_on),
+		text: corpo(tx.amount_cents, estado, tx.method, tx.occurred_on),
 		reply_markup: { inline_keyboard: teclado(txId, tx.category_id, tx.method, cats) },
 	});
+
+	// Mover um gasto para uma categoria conta como o valor dele entrando naquele mes: se esse for o
+	// lancamento que cruza o teto de la, o aviso sai igual ao do lancamento direto.
+	const aviso = mudouCategoria ? avisoEstouro(estado, tx.amount_cents, ym, hojeSP()) : null;
+	if (aviso) await tg(env, 'sendMessage', { chat_id: cb.message.chat.id, text: aviso });
 }
 
 // Todo update que o bot trata carrega o chat em um destes lugares. Lista explicita e nao busca
