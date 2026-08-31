@@ -1,0 +1,5 @@
+node_modules
+.wrangler
+package.json
+package-lock.json
+*-backup.sql

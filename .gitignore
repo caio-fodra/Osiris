@@ -165,3 +165,10 @@ dist
 .env*
 !.env.example
 .wrangler/
+
+# backup do D1: e o historico financeiro, nunca vai pro repo
+osiris-backup.sql
+*-backup.sql
+
+# ajustes locais do Claude Code: sao por maquina, nao por repo
+.claude/settings.local.json

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Olho geometrico, centrado no ladrilho. Preto e branco puros.
+       Atencao: SVG e XML, e XML proibe hifen duplo dentro de comentario. -->
+
+  <!-- Ladrilho cheio, e nao glifo solto: a aba do navegador pode ser clara ou
+       escura, e so o fundo proprio garante contraste nos dois casos. -->
+  <rect width="32" height="32" rx="7" fill="#000000"/>
+
+  <!-- Peca unica: amendoa preenchida com a pupila vazada por fill-rule
+       evenodd. Vazar em vez de desenhar um circulo preto por cima mantem a
+       pupila igual ao ladrilho, sem risco de borda de meio pixel entre as
+       duas formas. -->
+  <path fill="#FFFFFF" fill-rule="evenodd"
+        d="M3.5 16 Q16 2 28.5 16 Q16 30 3.5 16 Z
+           M12 16 a4 4 0 1 0 8 0 a4 4 0 1 0 -8 0"/>
+</svg>

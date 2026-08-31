@@ -1,0 +1,1203 @@
+<!doctype html>
+<html lang="pt-BR">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light" />
+		<title>Osiris One</title>
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<meta name="theme-color" content="#E3DCE4" />
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500&display=swap"
+			rel="stylesheet"
+		/>
+		<style>
+			/* ==========================================================================
+   SISTEMA
+   Todo valor de espaço, cor, tipo, raio e tempo vive aqui. Nada abaixo
+   desta seção usa número solto.
+   ========================================================================== */
+			:root {
+				/* Espaço. */
+				--s-1: 4px;
+				--s-2: 8px;
+				--s-3: 12px;
+				--s-4: 16px;
+				--s-5: 24px;
+				--s-6: 32px;
+				--s-7: 48px;
+				--s-8: 64px;
+
+				/* Cor. */
+				--c-paper: #e3dce4; /* fundo da janela        */
+				--c-sheet: #efeaef; /* folha                  */
+				--c-bar: #e2dae3; /* listra do papel        */
+				--c-rule: #c4b8c6; /* pauta / borda          */
+				--c-ink: #241c26; /* texto principal        */
+				--c-muted: #635769; /* texto secundário       */
+				--c-mark: #26605c; /* foco, série principal  */
+				--c-up: #a8322f; /* gasto subiu            */
+				--c-down: #4f7a3f; /* gasto caiu             */
+
+				/* Série categórica. */
+				--c-serie-1: #0a8a70; /* teal     */
+				--c-serie-2: #c1521f; /* laranja  */
+				--c-serie-3: #3d74c9; /* azul     */
+				--c-serie-4: #9c7a00; /* ocre     */
+				--c-serie-5: #c0537f; /* magenta  */
+				--c-serie-6: #2c7a2c; /* verde    */
+				--c-serie-7: #4a3aa7; /* violeta  */
+				--c-serie-8: #c0392e; /* vermelho */
+				--c-serie-outras: #7e7484;
+
+				/* Tipo. */
+				--t-micro: 11px; /* rótulos em caixa alta   */
+				--t-data: 13px; /* números e tabela        */
+				--t-body: 15px; /* prosa                   */
+				--t-lead: 19px; /* título da folha         */
+				--t-display: clamp(34px, 6.5vw, 54px);
+
+				/* Peso. */
+				--w-normal: 400;
+				--w-medium: 500;
+				--w-bold: 600;
+
+				/* Entrelinha. */
+				--lh-tight: 1.2;
+				--lh-base: 1.55;
+
+				/* Raio. */
+				--r-sm: 2px;
+				--r-md: 4px;
+
+				/* Movimento */
+				--dur-fast: 120ms;
+				--dur-base: 220ms;
+				--dur-slow: 380ms;
+				--ease: cubic-bezier(0.2, 0, 0, 1);
+				--ease-out: cubic-bezier(0, 0, 0.2, 1);
+
+				--f-mono: 'IBM Plex Mono', ui-monospace, 'Courier New', monospace;
+				--f-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+			}
+
+			/* ==========================================================================
+   BASE
+   ========================================================================== */
+			* {
+				box-sizing: border-box;
+			}
+
+			body {
+				margin: 0;
+				background: var(--c-paper);
+				color: var(--c-ink);
+				font-family: var(--f-sans);
+				font-size: var(--t-body);
+				font-weight: var(--w-normal);
+				line-height: var(--lh-base);
+				-webkit-font-smoothing: antialiased;
+			}
+
+			:focus-visible {
+				outline: 2px solid var(--c-mark);
+				outline-offset: 2px;
+			}
+
+			/* A folha ocupa a janela inteira. O formulario continuo nao tem largura de coluna fixa: */
+			.sheet {
+				position: relative;
+				padding: 0 var(--s-7) var(--s-8);
+				min-height: 100vh;
+				background: var(--c-sheet);
+				border-left: 1px solid var(--c-rule);
+				border-right: 1px solid var(--c-rule);
+			}
+			/* Trilho perfurado do formulário contínuo. É a única marca decorativa. */
+			.sheet::before,
+			.sheet::after {
+				content: '';
+				position: absolute;
+				top: 0;
+				bottom: 0;
+				width: var(--s-4);
+				background-image: radial-gradient(circle at 8px 11px, var(--c-rule) 1.7px, transparent 1.8px);
+				background-size: 16px 22px;
+				pointer-events: none;
+			}
+			.sheet::before {
+				left: 0;
+			}
+			.sheet::after {
+				right: 0;
+			}
+
+			/* ==========================================================================
+   CABEÇALHO
+   ========================================================================== */
+			.head {
+				position: sticky;
+				top: 0;
+				z-index: 2;
+				display: flex;
+				flex-wrap: wrap;
+				gap: var(--s-4);
+				align-items: flex-end;
+				justify-content: space-between;
+				padding: var(--s-6) 0 var(--s-4);
+				background: var(--c-sheet);
+				border-bottom: 2px solid var(--c-ink);
+			}
+
+			.brand {
+				font-family: var(--f-mono);
+				font-size: var(--t-micro);
+				font-weight: var(--w-bold);
+				letter-spacing: 0.22em;
+				text-transform: uppercase;
+				color: var(--c-muted);
+				line-height: var(--lh-tight);
+			}
+			.brand b {
+				display: block;
+				margin-top: var(--s-1);
+				font-size: var(--t-lead);
+				font-weight: var(--w-bold);
+				letter-spacing: 0.1em;
+				color: var(--c-ink);
+			}
+
+			.picker {
+				display: flex;
+				align-items: center;
+				gap: var(--s-2);
+			}
+
+			.picker button {
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				width: 30px;
+				height: 30px;
+				padding: 0;
+				font-family: var(--f-mono);
+				font-size: var(--t-body);
+				line-height: 1;
+				color: var(--c-ink);
+				background: transparent;
+				border: 1px solid var(--c-rule);
+				border-radius: var(--r-sm);
+				cursor: pointer;
+				transition:
+					background var(--dur-fast) var(--ease),
+					border-color var(--dur-fast) var(--ease);
+			}
+			.picker button:hover:not(:disabled) {
+				background: var(--c-bar);
+				border-color: var(--c-muted);
+			}
+			.picker button:disabled {
+				opacity: 0.32;
+				cursor: default;
+			}
+
+			.picker select {
+				font-family: var(--f-mono);
+				font-size: var(--t-data);
+				padding: var(--s-1) var(--s-3);
+				color: var(--c-ink);
+				background: var(--c-sheet);
+				border: 1px solid var(--c-rule);
+				border-radius: var(--r-sm);
+				transition: border-color var(--dur-fast) var(--ease);
+			}
+			.picker select:hover:not(:disabled) {
+				border-color: var(--c-muted);
+			}
+			.picker select:disabled {
+				opacity: 0.32;
+			}
+
+			/* Barra de progresso indeterminada, ancorada na régua do cabeçalho. Só aparece enquanto há
+			   requisição em voo. */
+			.progress {
+				position: absolute;
+				left: 0;
+				right: 0;
+				bottom: -2px;
+				height: 2px;
+				overflow: hidden;
+				opacity: 0;
+				transition: opacity var(--dur-fast) var(--ease);
+			}
+			[data-busy='true'] .progress {
+				opacity: 1;
+			}
+			.progress i {
+				display: block;
+				width: 40%;
+				height: 100%;
+				background: var(--c-mark);
+				animation: slide 900ms var(--ease) infinite;
+			}
+			@keyframes slide {
+				from {
+					transform: translateX(-100%);
+				}
+				to {
+					transform: translateX(350%);
+				}
+			}
+
+			/* ==========================================================================
+   TOTAL
+   ========================================================================== */
+			.total {
+				padding: var(--s-6) 0;
+				border-bottom: 1px solid var(--c-rule);
+			}
+
+			.label {
+				font-family: var(--f-mono);
+				font-size: var(--t-micro);
+				font-weight: var(--w-bold);
+				letter-spacing: 0.2em;
+				text-transform: uppercase;
+				color: var(--c-muted);
+				line-height: var(--lh-tight);
+				margin: 0;
+			}
+
+			.amount {
+				font-family: var(--f-mono);
+				font-weight: var(--w-medium);
+				font-size: var(--t-display);
+				line-height: var(--lh-tight);
+				letter-spacing: -0.02em;
+				font-variant-numeric: tabular-nums;
+				margin: var(--s-2) 0 var(--s-2);
+			}
+
+			.sub {
+				font-family: var(--f-mono);
+				font-size: var(--t-data);
+				color: var(--c-muted);
+				margin: 0;
+			}
+			.delta {
+				font-weight: var(--w-bold);
+			}
+			.delta[data-dir='up'] {
+				color: var(--c-up);
+			}
+			.delta[data-dir='down'] {
+				color: var(--c-down);
+			}
+
+			/* ==========================================================================
+   SEÇÕES
+   ========================================================================== */
+			.grid {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 0 var(--s-7);
+			}
+			/* Ocupa a linha inteira enquanto a grade tem duas colunas. Em tela larga vira a terceira coluna
+			   (ver ADAPTACOES). */
+			.panel--wide {
+				grid-column: 1 / -1;
+			}
+
+			.panel {
+				padding: var(--s-6) 0;
+				border-bottom: 1px solid var(--c-rule);
+				min-width: 0;
+			}
+			.panel .hint {
+				font-size: var(--t-data);
+				color: var(--c-muted);
+				margin: var(--s-1) 0 var(--s-5);
+			}
+
+			.plot {
+				position: relative;
+				height: 230px;
+			}
+			.plot--tall {
+				height: 280px;
+			}
+
+			/* ==========================================================================
+   LISTA DE CATEGORIAS
+   ========================================================================== */
+			.cats {
+				list-style: none;
+				margin: var(--s-5) 0 0;
+				padding: 0;
+				font-family: var(--f-mono);
+				font-size: var(--t-data);
+			}
+			.cats li {
+				display: flex;
+				align-items: center;
+				gap: var(--s-3);
+				padding: var(--s-1) var(--s-3);
+				margin: 0 calc(var(--s-3) * -1);
+			}
+			.cats li:nth-child(odd) {
+				background: var(--c-bar);
+			}
+			.cats .dot {
+				flex: none;
+				width: 9px;
+				height: 9px;
+				border-radius: var(--r-sm);
+			}
+			.cats .name {
+				flex: 1;
+				min-width: 0;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+			.cats .budget {
+				flex: none;
+				font-size: var(--t-micro);
+				color: var(--c-muted);
+			}
+			.cats .budget[data-over='true'] {
+				color: var(--c-up);
+			}
+			.cats .value {
+				font-variant-numeric: tabular-nums;
+			}
+
+			/* ==========================================================================
+   TABELA
+   ========================================================================== */
+			table {
+				width: 100%;
+				border-collapse: collapse;
+				table-layout: fixed;
+				font-family: var(--f-mono);
+				font-size: var(--t-data);
+				margin-top: var(--s-5);
+			}
+			th {
+				padding: 0 var(--s-3) var(--s-2);
+				font-size: var(--t-micro);
+				font-weight: var(--w-bold);
+				letter-spacing: 0.14em;
+				text-transform: uppercase;
+				color: var(--c-muted);
+				text-align: left;
+				border-bottom: 1px solid var(--c-rule);
+			}
+			td {
+				padding: var(--s-1) var(--s-3);
+				vertical-align: top;
+			}
+			tbody tr:nth-child(odd) {
+				background: var(--c-bar);
+			}
+			.col-date {
+				width: 56px;
+			}
+			.col-method {
+				width: 88px;
+			}
+			.col-value {
+				width: 112px;
+				text-align: right;
+			}
+			td.date,
+			td.method {
+				color: var(--c-muted);
+				white-space: nowrap;
+			}
+			td.desc {
+				font-family: var(--f-sans);
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+			td.value {
+				text-align: right;
+				font-variant-numeric: tabular-nums;
+				white-space: nowrap;
+			}
+			td.value[data-low='true'] {
+				color: var(--c-up);
+			}
+
+			/* ==========================================================================
+   SKELETON
+   O esqueleto reproduz a própria pauta do papel: linhas listradas vazias.
+   ========================================================================== */
+			.skel {
+				background: var(--c-bar);
+				border-radius: var(--r-sm);
+			}
+			.skel--amount {
+				width: min(340px, 70%);
+				height: var(--s-7);
+				margin: var(--s-2) 0;
+			}
+			.skel--sub {
+				width: 200px;
+				height: var(--s-4);
+			}
+			.skel--plot {
+				width: 100%;
+				height: 100%;
+				border-radius: var(--r-md);
+			}
+			.skel--row {
+				height: var(--s-5);
+				margin-bottom: 2px;
+			}
+			[data-busy='true'] .skel {
+				animation: breathe 1.4s var(--ease) infinite;
+			}
+			@keyframes breathe {
+				0%,
+				100% {
+					opacity: 1;
+				}
+				50% {
+					opacity: 0.55;
+				}
+			}
+
+			/* ==========================================================================
+   REVELAÇÃO ESCALONADA
+   Os blocos entram na ordem de leitura, 60ms entre um e outro. Só na
+   primeira carga; trocar de mês reusa o esqueleto, não repete a entrada.
+   ========================================================================== */
+			.reveal {
+				opacity: 0;
+				transform: translateY(4px);
+			}
+			.reveal[data-in='true'] {
+				opacity: 1;
+				transform: none;
+				transition:
+					opacity var(--dur-slow) var(--ease-out) var(--delay, 0ms),
+					transform var(--dur-slow) var(--ease-out) var(--delay, 0ms);
+			}
+
+			/* ==========================================================================
+   MENSAGENS
+   ========================================================================== */
+			.msg {
+				font-family: var(--f-mono);
+				font-size: var(--t-data);
+				color: var(--c-muted);
+				padding: var(--s-6) 0;
+				margin: 0;
+			}
+			.msg[data-tone='error'] {
+				color: var(--c-up);
+			}
+			.msg code {
+				padding: 0 var(--s-1);
+				background: var(--c-bar);
+				border-radius: var(--r-sm);
+			}
+			.msg[hidden] {
+				display: none;
+			}
+
+			/* ==========================================================================
+   ADAPTAÇÕES
+   ========================================================================== */
+			@media (max-width: 820px) {
+				.sheet {
+					padding: 0 var(--s-4) var(--s-7);
+				}
+				.sheet::before,
+				.sheet::after {
+					display: none;
+				}
+				.grid {
+					grid-template-columns: 1fr;
+					gap: 0;
+				}
+				.col-method {
+					display: none;
+				}
+			}
+
+			/* Acima disso a terceira coluna cabe sem espremer nenhum dos tres graficos, e os tres paineis do
+			   mes ficam visiveis de uma vez, sem rolagem. */
+			@media (min-width: 1500px) {
+				.grid {
+					grid-template-columns: 1fr 1fr 1fr;
+				}
+				.panel--wide {
+					grid-column: auto;
+				}
+				/* A coluna do donut e a mais alta, porque leva a lista de categorias embaixo. Sem isso as
+				   outras duas ficariam com um vao morto sob o grafico ate a linha de baixo. */
+				.panel {
+					display: flex;
+					flex-direction: column;
+				}
+				.panel .plot {
+					flex: 1 1 auto;
+				}
+			}
+
+			@media (prefers-reduced-motion: reduce) {
+				*,
+				*::before,
+				*::after {
+					animation-duration: 1ms !important;
+					animation-iteration-count: 1 !important;
+					transition-duration: 1ms !important;
+				}
+				.reveal {
+					opacity: 1;
+					transform: none;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<main class="sheet" id="root" data-busy="true">
+			<div class="head">
+				<div class="brand">Gastos pessoais<b>Extrato</b></div>
+				<div class="picker">
+					<button id="prev" type="button" aria-label="Mês anterior" disabled>&lsaquo;</button>
+					<select id="month" aria-label="Escolher mês" disabled></select>
+					<button id="next" type="button" aria-label="Próximo mês" disabled>&rsaquo;</button>
+				</div>
+				<div class="progress" role="progressbar" aria-label="Carregando dados do mês"><i></i></div>
+			</div>
+
+			<div id="app" aria-live="polite">
+				<div class="total reveal" style="--delay: 0ms">
+					<p class="label">Total do mês</p>
+					<div id="amount"><div class="skel skel--amount"></div></div>
+					<div id="sub"><div class="skel skel--sub"></div></div>
+				</div>
+
+				<div class="grid">
+					<section class="panel reveal" style="--delay: 60ms">
+						<h2 class="label">Por categoria</h2>
+						<p class="hint">Participação de cada categoria no total do mês.</p>
+						<div class="plot" id="donutBox"><div class="skel skel--plot"></div></div>
+						<ul class="cats" id="cats"></ul>
+					</section>
+
+					<section class="panel reveal" style="--delay: 120ms">
+						<h2 class="label">O que mudou</h2>
+						<p class="hint">Diferença por categoria contra o mês anterior.</p>
+						<div class="plot plot--tall" id="deltaBox"><div class="skel skel--plot"></div></div>
+					</section>
+
+					<section class="panel panel--wide reveal" style="--delay: 180ms">
+						<h2 class="label">Evolução</h2>
+						<p class="hint">Total por mês, últimos doze meses com registro.</p>
+						<div class="plot" id="lineBox"><div class="skel skel--plot"></div></div>
+					</section>
+				</div>
+
+				<section class="panel reveal" style="--delay: 240ms">
+					<h2 class="label">Lançamentos</h2>
+					<p class="hint">Do mais recente para o mais antigo. Valor em vermelho: o bot interpretou a mensagem com baixa confiança.</p>
+					<div id="table"></div>
+				</section>
+			</div>
+
+			<p class="msg" id="msg" hidden></p>
+		</main>
+
+		<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+		<script>
+			(function () {
+				'use strict';
+
+				/* ---- tokens lidos do CSS ------------------------------------------ Nada de cor, tipo ou
+				   tempo é redigitado aqui: tudo sai do :root lá em cima, que é a única fonte. */
+				var raiz = getComputedStyle(document.documentElement);
+				function token(nome) {
+					return raiz.getPropertyValue(nome).trim();
+				}
+				function numero(nome) {
+					return parseFloat(token(nome));
+				} /* "13px" -> 13 */
+
+				var T = {
+					ink: token('--c-ink'),
+					muted: token('--c-muted'),
+					rule: token('--c-rule'),
+					sheet: token('--c-sheet'),
+					mark: token('--c-mark'),
+					up: token('--c-up'),
+					down: token('--c-down'),
+					mono: token('--f-mono'),
+					data: numero('--t-data'),
+					durSlow: numero('--dur-slow'),
+					serie: [1, 2, 3, 4, 5, 6, 7, 8].map(function (i) {
+						return token('--c-serie-' + i);
+					}),
+					outras: token('--c-serie-outras'),
+				};
+
+				var MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+				var CALMO = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+				var moeda = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+
+				function reais(cents) {
+					return moeda.format((cents || 0) / 100);
+				}
+				function rotulo(m) {
+					var p = m.split('-');
+					return MESES[Number(p[1]) - 1] + '/' + p[0].slice(2);
+				}
+				/* Oito casas de identidade, atribuídas em ordem. Da nona categoria em diante a cauda vira uma
+				   fatia "Outras" cinza. */
+				var CASAS = T.serie.length;
+
+				function comCores(cats) {
+					var lista = cats;
+					if (cats.length > CASAS) {
+						var cauda = cats.slice(CASAS - 1);
+						lista = cats.slice(0, CASAS - 1);
+						lista.push({
+							category: 'Outras (' + cauda.length + ')',
+							budget_cents: null,
+							total_cents: cauda.reduce(function (s, c) {
+								return s + c.total_cents;
+							}, 0),
+							outras: true,
+						});
+					}
+					return lista.map(function (c, i) {
+						c.cor = c.outras ? T.outras : T.serie[i];
+						return c;
+					});
+				}
+				function esc(s) {
+					return String(s).replace(/[&<>"]/g, function (c) {
+						return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+					});
+				}
+				function mesVizinho(m, d) {
+					var p = m.split('-');
+					var dt = new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1 + d, 1));
+					return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0');
+				}
+
+				var el = {};
+				['root', 'app', 'msg', 'month', 'prev', 'next', 'amount', 'sub', 'cats', 'table', 'donutBox', 'deltaBox', 'lineBox'].forEach(
+					function (id) {
+						el[id] = document.getElementById(id);
+					},
+				);
+
+				var meses = []; /* [{month, total_cents, n}] em ordem crescente */
+				var indice = -1; /* posição atual dentro de `meses`              */
+				var graficos = {};
+				var geracao = 0; /* token de requisição: só a mais nova pinta    */
+				var bases = {}; /* resumo dos meses já lidos, base de comparação */
+
+				/* ---- ciclo de carregamento ---------------------------------------- */
+
+				function ocupado(estado) {
+					el.root.dataset.busy = String(estado);
+					el.prev.disabled = estado || indice <= 0;
+					el.next.disabled = estado || indice < 0 || indice >= meses.length - 1;
+					el.month.disabled = estado;
+				}
+
+				function esqueleto() {
+					el.amount.innerHTML = '<div class="skel skel--amount"></div>';
+					el.sub.innerHTML = '<div class="skel skel--sub"></div>';
+					el.cats.innerHTML = '';
+					el.table.innerHTML = Array(6)
+						.join(0)
+						.split('0')
+						.map(function () {
+							return '<div class="skel skel--row"></div>';
+						})
+						.join('');
+					['donutBox', 'deltaBox', 'lineBox'].forEach(function (k) {
+						if (graficos[k]) {
+							graficos[k].destroy();
+							delete graficos[k];
+						}
+						el[k].innerHTML = '<div class="skel skel--plot"></div>';
+					});
+				}
+
+				function api(rota) {
+					return fetch(rota).then(function (r) {
+						return r.json().then(function (corpo) {
+							if (!r.ok) throw new Error(corpo && corpo.error ? corpo.error : 'Erro ' + r.status);
+							return corpo;
+						});
+					});
+				}
+
+				/* Guarda o resumo do mês. */
+				function guardaBase(corpo) {
+					bases[corpo.month] = {
+						month: corpo.month,
+						n: corpo.n,
+						total_cents: corpo.total_cents,
+						categories: corpo.categories,
+					};
+					return corpo;
+				}
+
+				function leBase(m) {
+					if (bases[m]) return Promise.resolve(bases[m]);
+					return api('/api/month?m=' + m)
+						.then(guardaBase)
+						.then(function () {
+							return bases[m];
+						});
+				}
+
+				/* Isola cada painel. Antes, os cinco desenhos rodavam nus dentro do mesmo `.then`. */
+				function pinta(caixa, fn) {
+					try {
+						fn();
+					} catch (e) {
+						console.error('Falha ao desenhar ' + caixa, e);
+						if (el[caixa]) {
+							el[caixa].innerHTML =
+								'<p class="msg" data-tone="error">Este painel não pôde ser desenhado. ' + 'O erro está no console do navegador.</p>';
+						}
+					}
+				}
+
+				/* ---- gráficos ------------------------------------------------------ */
+
+				if (window.Chart) {
+					Chart.defaults.font.family = T.mono;
+					Chart.defaults.font.size = T.data;
+					Chart.defaults.color = T.muted;
+					Chart.defaults.animation = CALMO ? false : { duration: T.durSlow, easing: 'easeOutQuart' };
+					Chart.defaults.plugins.legend.display = false;
+					Chart.defaults.maintainAspectRatio = false;
+				}
+
+				function plota(caixa, config) {
+					if (graficos[caixa]) {
+						graficos[caixa].destroy();
+						delete graficos[caixa];
+					}
+					el[caixa].innerHTML = '<canvas></canvas>';
+					var c = new Chart(el[caixa].firstChild, config);
+					graficos[caixa] = c;
+					/* O container trocou de conteúdo duas vezes na mesma tarefa (esqueleto, depois canvas). Remede
+					   no frame seguinte, quando o layout já assentou. */
+					requestAnimationFrame(function () {
+						if (graficos[caixa] === c) c.resize();
+					});
+					return c;
+				}
+
+				/* Fábricas, não constantes: o Chart.js recebe estes objetos por referência e dois gráficos não
+				   devem compartilhar a mesma config de escala. */
+				function eixoLimpo() {
+					return { grid: { display: false }, border: { display: false } };
+				}
+				function eixoPautado() {
+					return { grid: { color: T.rule, drawTicks: false }, border: { display: false } };
+				}
+				function emReais(v) {
+					return moeda.format(v);
+				}
+
+				/* ---- desenho ------------------------------------------------------- */
+
+				function pintaTotal(mes, anterior) {
+					el.amount.innerHTML = '<div class="amount">' + reais(mes.total_cents) + '</div>';
+
+					var partes = [mes.n + (mes.n === 1 ? ' lançamento' : ' lançamentos')];
+					if (anterior && anterior.total_cents) {
+						var dif = mes.total_cents - anterior.total_cents;
+						var pct = Math.round((Math.abs(dif) / anterior.total_cents) * 100);
+						partes.push(
+							'<span class="delta" data-dir="' +
+								(dif >= 0 ? 'up' : 'down') +
+								'">' +
+								(dif >= 0 ? '+' : '\u2212') +
+								pct +
+								'%</span> contra ' +
+								rotulo(anterior.month),
+						);
+					} else {
+						partes.push('sem base de comparação em ' + rotulo(mesVizinho(mes.month, -1)));
+					}
+					el.sub.innerHTML = '<p class="sub">' + partes.join(' · ') + '</p>';
+				}
+
+				function pintaDonut(mes) {
+					var cats = comCores((mes && mes.categories) || []);
+
+					if (!cats.length) {
+						el.donutBox.innerHTML = '<p class="msg">Nenhuma categoria neste mês.</p>';
+						el.cats.innerHTML = '';
+						return;
+					}
+
+					plota('donutBox', {
+						type: 'doughnut',
+						data: {
+							labels: cats.map(function (c) {
+								return c.category;
+							}),
+							datasets: [
+								{
+									data: cats.map(function (c) {
+										return c.total_cents / 100;
+									}),
+									backgroundColor: cats.map(function (c) {
+										return c.cor;
+									}),
+									borderColor: T.sheet,
+									borderWidth: 2,
+									hoverOffset: 6,
+								},
+							],
+						},
+						options: {
+							responsive: true,
+							cutout: '62%',
+							plugins: {
+								tooltip: {
+									callbacks: {
+										label: function (c) {
+											return ' ' + c.label + ': ' + emReais(c.raw);
+										},
+									},
+								},
+							},
+						},
+					});
+
+					el.cats.innerHTML = cats
+						.map(function (c) {
+							var orcamento = '';
+							if (c.budget_cents) {
+								var uso = Math.round((c.total_cents / c.budget_cents) * 100);
+								orcamento = '<span class="budget" data-over="' + (uso > 100) + '">' + uso + '% de ' + reais(c.budget_cents) + '</span>';
+							}
+							return (
+								'<li>' +
+								'<span class="dot" style="background:' +
+								c.cor +
+								'"></span>' +
+								'<span class="name">' +
+								esc(c.category) +
+								'</span>' +
+								orcamento +
+								'<span class="value">' +
+								reais(c.total_cents) +
+								'</span>' +
+								'</li>'
+							);
+						})
+						.join('');
+				}
+
+				function pintaDelta(mes, anterior, semBase) {
+					/* Único painel que depende de um segundo mês. Quando essa leitura cai, o recado é daqui: */
+					if (semBase) {
+						el.deltaBox.innerHTML = '<p class="msg" data-tone="error">Não foi possível ler ' + rotulo(semBase) + ' para comparar.</p>';
+						return;
+					}
+
+					var atuais = (mes && mes.categories) || [];
+					var antes = (anterior && anterior.categories) || [];
+
+					/* Object.create(null) e não {}: nomes de categoria vêm do bot, e um "constructor" ou
+					   "toString" faria `mapa[k] || 0` devolver uma função. */
+					var mapa = Object.create(null);
+					antes.forEach(function (c) {
+						mapa[c.category] = -(c.total_cents || 0);
+					});
+					atuais.forEach(function (c) {
+						mapa[c.category] = (mapa[c.category] || 0) + (c.total_cents || 0);
+					});
+
+					var linhas = Object.keys(mapa)
+						.map(function (k) {
+							return { cat: k, d: mapa[k] };
+						})
+						.filter(function (r) {
+							return r.d !== 0;
+						})
+						.sort(function (a, b) {
+							return Math.abs(b.d) - Math.abs(a.d);
+						})
+						.slice(0, 9)
+						.reverse();
+
+					if (!linhas.length) {
+						/* "Nada mudou" e "não há com o que comparar" são estados diferentes e precisam de textos
+						   diferentes: juntos, ambos parecem falha de carga. */
+						el.deltaBox.innerHTML =
+							'<p class="msg">' +
+							(anterior ? 'Nada mudou em relação a ' + rotulo(anterior.month) + '.' : 'Sem mês anterior para comparar.') +
+							'</p>';
+						return;
+					}
+
+					plota('deltaBox', {
+						type: 'bar',
+						data: {
+							labels: linhas.map(function (r) {
+								return r.cat;
+							}),
+							datasets: [
+								{
+									data: linhas.map(function (r) {
+										return r.d / 100;
+									}),
+									backgroundColor: linhas.map(function (r) {
+										return r.d > 0 ? T.up : T.down;
+									}),
+									borderWidth: 0,
+								},
+							],
+						},
+						options: {
+							indexAxis: 'y',
+							responsive: true,
+							scales: {
+								x: Object.assign(eixoPautado(), { ticks: { callback: emReais } }),
+								y: eixoLimpo(),
+							},
+							plugins: {
+								tooltip: {
+									callbacks: {
+										label: function (c) {
+											return (c.raw > 0 ? ' subiu ' : ' caiu ') + moeda.format(Math.abs(c.raw));
+										},
+									},
+								},
+							},
+						},
+					});
+				}
+
+				function pintaLinha(atual) {
+					var janela = meses.slice(-12);
+					plota('lineBox', {
+						type: 'line',
+						data: {
+							labels: janela.map(function (m) {
+								return rotulo(m.month);
+							}),
+							datasets: [
+								{
+									data: janela.map(function (m) {
+										return m.total_cents / 100;
+									}),
+									borderColor: T.mark,
+									borderWidth: 2,
+									tension: 0.3,
+									pointRadius: janela.map(function (m) {
+										return m.month === atual ? 5 : 3;
+									}),
+									/* O mês aberto é destacado com tinta, não com o vermelho de "subiu": ali ele significaria
+									   alta, e significa só "você está aqui". */
+									pointBackgroundColor: janela.map(function (m) {
+										return m.month === atual ? T.ink : T.mark;
+									}),
+									pointBorderWidth: 0,
+								},
+							],
+						},
+						options: {
+							responsive: true,
+							scales: {
+								x: eixoLimpo(),
+								y: Object.assign(eixoPautado(), { beginAtZero: true, ticks: { callback: emReais } }),
+							},
+							plugins: {
+								tooltip: {
+									callbacks: {
+										label: function (c) {
+											return ' ' + emReais(c.raw);
+										},
+									},
+								},
+							},
+						},
+					});
+				}
+
+				function pintaTabela(mes) {
+					var lista = (mes && mes.transactions) || [];
+
+					if (!lista.length) {
+						el.table.innerHTML =
+							'<p class="msg">Nenhum lançamento em ' + rotulo(mes.month) + '. Registre uma despesa pelo bot e recarregue.</p>';
+						return;
+					}
+
+					var corpo = lista
+						.map(function (t) {
+							var baixa = typeof t.confidence === 'number' && t.confidence < 0.6;
+							return (
+								'<tr>' +
+								'<td class="date">' +
+								t.occurred_on.slice(8) +
+								'/' +
+								t.occurred_on.slice(5, 7) +
+								'</td>' +
+								'<td class="desc">' +
+								esc(t.description || '') +
+								'</td>' +
+								'<td>' +
+								esc(t.category) +
+								'</td>' +
+								'<td class="method">' +
+								esc(t.method || '') +
+								'</td>' +
+								'<td class="value" data-low="' +
+								baixa +
+								'">' +
+								reais(t.amount_cents) +
+								'</td>' +
+								'</tr>'
+							);
+						})
+						.join('');
+
+					el.table.innerHTML =
+						'<table>' +
+						"<colgroup><col class='col-date'><col><col><col class='col-method'><col class='col-value'></colgroup>" +
+						'<thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Forma</th>' +
+						"<th style='text-align:right'>Valor</th></tr></thead>" +
+						'<tbody>' +
+						corpo +
+						'</tbody>' +
+						'</table>';
+				}
+
+				/* ---- navegação ----------------------------------------------------- */
+
+				function vaiPara(i) {
+					if (i < 0 || i >= meses.length) return Promise.resolve();
+
+					var meu = ++geracao; /* qualquer resposta anterior a esta é descartada */
+					indice = i;
+					var m = meses[i].month;
+					var mesBase = mesVizinho(m, -1);
+					/* Só pede o mês anterior se a lista disser que ele tem registro. Sem isso, toda troca gastava
+					   uma ida ao banco para receber zero de volta. */
+					var temBase = meses.some(function (x) {
+						return x.month === mesBase;
+					});
+					el.month.value = m;
+
+					ocupado(true);
+					esqueleto();
+
+					/* A comparação corre separada e pode cair sozinha. */
+					var falhouBase = false;
+					var base = temBase
+						? leBase(mesBase).catch(function () {
+								falhouBase = true;
+								return null;
+							})
+						: Promise.resolve(null);
+
+					return Promise.all([api('/api/month?m=' + m).then(guardaBase), base])
+						.then(function (r) {
+							if (meu !== geracao) return;
+							var mes = r[0];
+							var anterior = r[1] && r[1].n ? r[1] : null;
+							pinta('amount', function () {
+								pintaTotal(mes, anterior);
+							});
+							pinta('donutBox', function () {
+								pintaDonut(mes);
+							});
+							pinta('deltaBox', function () {
+								pintaDelta(mes, anterior, falhouBase ? mesBase : null);
+							});
+							pinta('lineBox', function () {
+								pintaLinha(m);
+							});
+							pinta('table', function () {
+								pintaTabela(mes);
+							});
+							el.msg.hidden = true;
+						})
+						.catch(function (e) {
+							if (meu === geracao) falha(e);
+						})
+						.then(function () {
+							if (meu === geracao) ocupado(false);
+						});
+				}
+
+				function falha(e) {
+					el.msg.hidden = false;
+					el.msg.dataset.tone = 'error';
+					el.msg.textContent = 'Não foi possível ler o banco: ' + e.message;
+				}
+
+				function revela() {
+					var blocos = document.querySelectorAll('.reveal');
+					requestAnimationFrame(function () {
+						for (var i = 0; i < blocos.length; i++) blocos[i].dataset.in = 'true';
+					});
+				}
+
+				el.month.addEventListener('change', function () {
+					vaiPara(
+						meses.findIndex(function (m) {
+							return m.month === el.month.value;
+						}),
+					);
+				});
+				el.prev.addEventListener('click', function () {
+					vaiPara(indice - 1);
+				});
+				el.next.addEventListener('click', function () {
+					vaiPara(indice + 1);
+				});
+
+				/* ---- partida ------------------------------------------------------- */
+
+				api('/api/months')
+					.then(function (lista) {
+						meses = lista;
+
+						if (!meses.length) {
+							el.app.hidden = true;
+							el.msg.hidden = false;
+							el.msg.innerHTML = 'A tabela <code>transactions</code> está vazia. ' + 'Registre um gasto pelo bot no Telegram e recarregue.';
+							ocupado(false);
+							return;
+						}
+
+						el.month.innerHTML = meses
+							.map(function (m) {
+								return '<option value="' + m.month + '">' + rotulo(m.month) + '</option>';
+							})
+							.join('');
+
+						revela();
+						return vaiPara(meses.length - 1);
+					})
+					.catch(function (e) {
+						falha(e);
+						ocupado(false);
+					});
+			})();
+		</script>
+	</body>
+</html>

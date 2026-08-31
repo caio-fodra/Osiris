@@ -1,16 +1,26 @@
 {
-  "name": "gastos",
+  "name": "osiris",
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "deploy": "wrangler deploy",
-    "dev": "wrangler dev",
-    "start": "wrangler dev",
-    "test": "vitest"
+    "dev:bot": "wrangler dev -c apps/bot/wrangler.jsonc --persist-to .wrangler/state",
+    "dev:web": "wrangler dev -c apps/web/wrangler.jsonc --persist-to .wrangler/state",
+    "deploy": "npm run deploy:bot && npm run deploy:web",
+    "deploy:bot": "wrangler deploy -c apps/bot/wrangler.jsonc",
+    "deploy:web": "wrangler deploy -c apps/web/wrangler.jsonc",
+    "db:migrate": "wrangler d1 migrations apply gastos-db --local -c apps/bot/wrangler.jsonc --persist-to .wrangler/state",
+    "db:migrate:remote": "wrangler d1 migrations apply gastos-db --remote -c apps/bot/wrangler.jsonc",
+    "db:migrate:list": "wrangler d1 migrations list gastos-db --remote -c apps/bot/wrangler.jsonc",
+    "db:seed": "node scripts/seed.mjs",
+    "db:seed:remote": "node scripts/seed.mjs --remote",
+    "db:reset": "node scripts/reset.mjs",
+    "db:reset:seeded": "node scripts/reset.mjs --seeded-only",
+    "backup": "wrangler d1 export gastos-db --remote --output osiris-backup.sql -c apps/bot/wrangler.jsonc",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.0.0",
-    "vitest": "~4.1.0",
+    "prettier": "^3.9.6",
     "wrangler": "^4.127.1"
   }
 }

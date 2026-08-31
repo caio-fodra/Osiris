@@ -1,0 +1,27 @@
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "osiris-web",
+	"main": "src/index.js",
+	"compatibility_date": "2026-08-28",
+
+	"assets": {
+		"directory": "./public/",
+		"binding": "ASSETS",
+	},
+
+	// Mesmo banco do bot (apps/bot) e a mesma pasta de migrations, na raiz do repo: existe uma cópia
+	// só do schema para os dois workers.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "gastos-db",
+			"database_id": "<SEU_DATABASE_ID_gastos-db>",
+			"migrations_dir": "../../migrations",
+		},
+	],
+
+	// 8787 é do bot; assim dá para rodar os dois `dev` ao mesmo tempo.
+	"dev": {
+		"port": 8788,
+	},
+}

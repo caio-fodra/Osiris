@@ -1,0 +1,28 @@
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "osiris-bot",
+	"main": "src/index.js",
+	"compatibility_date": "2026-08-25",
+	"observability": { "enabled": true },
+	"upload_source_maps": true,
+	// O banco e um so, compartilhado com o dashboard em apps/web, entao migrations/ mora na raiz do
+	// repo e nao aqui dentro. O wrangler resolve migrations_dir relativo a este arquivo, dai o ../../.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "gastos-db",
+			"database_id": "<SEU_DATABASE_ID_gastos-db>",
+			"migrations_dir": "../../migrations",
+		},
+	],
+	"vars": {
+		"MY_CHAT_ID": "<SEU_CHAT_ID>",
+	},
+	"triggers": {
+		"crons": ["0 12 * * 1"],
+	},
+	// Porta fixa pros dois workers poderem rodar em dev ao mesmo tempo.
+	"dev": {
+		"port": 8787,
+	},
+}
