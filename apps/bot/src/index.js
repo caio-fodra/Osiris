@@ -42,21 +42,22 @@ export default {
 	},
 };
 
+/* As tabelas da aplicacao, descobertas em vez de listadas. Exportada so pra ser testavel: */
+export const SQL_TABELAS = `select name from sqlite_master
+  where type = 'table'
+    and name not like 'sqlite_%'
+    and name not glob '_cf_*'
+    and name <> 'd1_migrations'
+  order by name`;
+
 /* Backup semanal (o cron esta em wrangler.jsonc). Vai como arquivo anexado e nao como texto porque
    mensagem do Telegram para em 4096 caracteres, e o dump passa disso rapido. */
 async function backup(env) {
 	// todas as tabelas da aplicacao, descobertas e nao listadas.
-	const { results: tabelas } = await env.DB.prepare(
-		`select name from sqlite_master
-      where type = 'table'
-        and name not like 'sqlite_%'
-        and name not like '\_cf\_%' escape ''
-        and name <> 'd1_migrations'
-      order by name`,
-	).all();
+	const { results: tabelas } = await env.DB.prepare(SQL_TABELAS).all();
 
 	// O nome vai interpolado porque bind nao vale pra identificador.
-	const dados = await env.DB.batch(tabelas.map((t) => env.DB.prepare(`select * from "${t.name}"`)));
+	const dados = await env.DB.batch(tabelas.map((t) => env.DB.prepare(`select * from "${t.name}" order by rowid`)));
 
 	// Uma leitura do relogio, usada no campo e no nome do arquivo. Com duas, um cron disparando
 	// 23:59:59.9xx UTC podia estampar uma data no gerado_em e outra no nome.
