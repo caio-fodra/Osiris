@@ -1,6 +1,6 @@
 // Tudo que chega do usuario passa por aqui antes de qualquer comparacao: minusculas, sem acento,
 // espacos colapsados.
-const norm = (s) =>
+export const norm = (s) =>
 	s
 		.toLowerCase()
 		.normalize('NFD')

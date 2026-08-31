@@ -2,6 +2,7 @@
   "name": "osiris",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev:bot": "wrangler dev -c apps/bot/wrangler.jsonc --persist-to .wrangler/state",
     "dev:web": "wrangler dev -c apps/web/wrangler.jsonc --persist-to .wrangler/state",
