@@ -14,8 +14,8 @@
 	"d1_databases": [
 		{
 			"binding": "DB",
-			"database_name": "gastos-db",
-			"database_id": "<SEU_DATABASE_ID_gastos-db>",
+			"database_name": "osiris-db",
+			"database_id": "c1f8cfaf-34ee-45fb-9acc-284b31195f34",
 			"migrations_dir": "../../migrations",
 		},
 	],
