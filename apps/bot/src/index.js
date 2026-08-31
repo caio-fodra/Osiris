@@ -1,4 +1,4 @@
-import { handle } from './handle.js';
+import { handle, chatDe } from './handle.js';
 
 export default {
 	async fetch(req, env, ctx) {
@@ -19,7 +19,11 @@ export default {
 			}
 
 			// A segunda trava: o bot e de uso pessoal.
-			const chatId = upd.message?.chat?.id ?? upd.callback_query?.message?.chat?.id;
+			const chatId = chatDe(upd);
+			if (chatId === undefined) {
+				console.log('update sem chat:', Object.keys(upd).join(','));
+				return new Response('ok');
+			}
 			if (String(chatId) !== env.MY_CHAT_ID) return new Response('ok');
 
 			// Responde 200 na hora e processa em segundo plano, pra nao arriscar o timeout do webhook. O
@@ -38,28 +42,54 @@ export default {
 	async scheduled(event, env, ctx) {
 		ctx.waitUntil(
 			(async () => {
-				// Junta o nome da categoria no dump: o backup precisa ser legivel sozinho, sem depender de
-				// cruzar ids com a tabela categories depois.
-				const { results } = await env.DB.prepare(
-					`
-        select t.*, c.name as categoria
-        from transactions t
-        left join categories c on c.id = t.category_id
-        order by t.id
-      `,
-				).all();
+				// As tres tabelas, nao so transactions.
+				const [tx, cats, rules] = await env.DB.batch([
+					env.DB.prepare(
+						`select t.*, c.name as categoria
+             from transactions t
+             left join categories c on c.id = t.category_id
+            order by t.id`,
+					),
+					env.DB.prepare('select * from categories order by id'),
+					env.DB.prepare('select * from category_rules order by keyword'),
+				]);
+
+				const dump = {
+					// versao muda a forma do arquivo: todo backup anterior a este commit e um array de lancamentos
+					// na raiz, sem categoria nem regra.
+					versao: 2,
+					gerado_em: new Date().toISOString(),
+					transactions: tx.results,
+					categories: cats.results,
+					category_rules: rules.results,
+				};
 
 				const fd = new FormData();
 				fd.append('chat_id', env.MY_CHAT_ID);
-				fd.append('caption', `backup · ${results.length} transacoes`);
+				fd.append(
+					'caption',
+					`backup · ${dump.transactions.length} lançamentos · ${dump.categories.length} categorias · ${dump.category_rules.length} regras`,
+				);
 				fd.append(
 					'document',
-					new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' }),
+					new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' }),
 					`osiris-${new Date().toISOString().slice(0, 10)}.json`,
 				);
 
 				const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendDocument`, { method: 'POST', body: fd });
-				if (!r.ok) console.error('backup falhou', r.status, await r.text());
+				if (!r.ok) {
+					// Um cron que falha calado sao meses sem backup sem ninguem notar. O log fica pro diagnostico
+					// e a mensagem avisa quem precisa saber.
+					console.error('backup falhou', r.status, await r.text());
+					await fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendMessage`, {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({
+							chat_id: env.MY_CHAT_ID,
+							text: `O backup semanal falhou (HTTP ${r.status}). O banco está intacto; é o envio que não foi.`,
+						}),
+					}).catch((e) => console.error('aviso de falha de backup tambem falhou', e));
+				}
 			})(),
 		);
 	},

@@ -329,13 +329,34 @@ async function onCallback(cb, env) {
 	});
 }
 
+// Todo update que o bot trata carrega o chat em um destes lugares. Lista explicita e nao busca
+// recursiva:
+export const chatDe = (upd) => upd.message?.chat?.id ?? upd.edited_message?.chat?.id ?? upd.callback_query?.message?.chat?.id;
+
 export async function handle(upd, env) {
-	if (upd.callback_query) return onCallback(upd.callback_query, env);
-	if (upd.message) {
-		// O update_id viaja grudado na mensagem so pra chegar ao insert como tg_update_id: e ele que
-		// torna o processamento idempotente.
-		upd.message._update_id = upd.update_id;
-		return onMessage(upd.message, env);
+	// O try engloba tudo porque index.js JA respondeu 200 antes de chamar aqui (index.js:27-33): o
+	// Telegram da o update por entregue e nunca reenvia.
+	try {
+		// Os await nao sao decoracao. Com 'return onCallback(...)' a promise sai do frame do try e a
+		// rejeicao dela passaria longe deste catch.
+		if (upd.callback_query) return await onCallback(upd.callback_query, env);
+		if (upd.message) {
+			// O update_id viaja grudado na mensagem so pra chegar ao insert como tg_update_id: e ele que
+			// torna o processamento idempotente.
+			upd.message._update_id = upd.update_id;
+			return await onMessage(upd.message, env);
+		}
+		// Qualquer outro tipo de update (entrada em grupo, enquete) e ignorado.
+		console.log('update ignorado:', Object.keys(upd).join(','));
+	} catch (e) {
+		console.error('handle falhou', e);
+		const chatId = chatDe(upd);
+		// tg() nao lanca em resposta 4xx (so loga), mas lanca em falha de rede.
+		if (chatId) {
+			await tg(env, 'sendMessage', {
+				chat_id: chatId,
+				text: 'Deu erro aqui. Manda de novo — confira no /relatorio se já tinha entrado.',
+			}).catch(() => {});
+		}
 	}
-	// Qualquer outro tipo de update (edicao, entrada em grupo) e ignorado.
 }
