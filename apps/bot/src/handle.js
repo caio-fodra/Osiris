@@ -29,10 +29,11 @@ function hojeSP() {
 // Cada recusa do parser vira uma frase que repete o formato certo: a mensagem de erro e a unica
 // documentacao que o usuario le.
 const ERRO = {
-	sem_valor: 'Nao achei o valor. Formato: 120 mercado 12/08 credito',
-	valor_ambiguo: 'Achei mais de um numero. Manda so o valor: 120 mercado 12/08 credito',
-	data_invalida: 'Data invalida. Use dd/mm, tipo 12/08.',
-	data_ambigua: 'Achei mais de uma data. Manda so uma: 120 mercado 12/08',
+	sem_valor: 'Não achei o valor. Formato: 120 mercado 12/08 credito',
+	valor_ambiguo: 'Achei mais de um número. Manda só o valor: 120 mercado 12/08 credito',
+	data_invalida: 'Data inválida. Use dd/mm, ou dd/mm/aaaa no ano corrente: 12/08.',
+	data_ambigua: 'Achei mais de uma data. Manda só uma: 120 mercado 12/08',
+	metodo_ambiguo: 'Achei mais de uma forma de pagamento. Manda só uma: 120 mercado credito',
 };
 
 // Carrega a tabela de regras inteira a cada mensagem. Sao poucas dezenas de linhas, e o parser

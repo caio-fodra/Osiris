@@ -33,7 +33,9 @@ export const LABEL = {
 };
 
 const RE_VALOR = /^(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+,\d{2}|\d+(?:[.,]\d{1,2})?)$/;
-const RE_DATA = /^(\d{1,2})\/(\d{1,2})$/;
+// O ano e capturado mesmo sendo aceito so quando e o corrente. Capturar mais do que se aceita e o
+// que impede token com cara de data de vazar pra descricao:
+const RE_DATA = /^(\d{1,2})\/(\d{1,2})(?:\/(\d*))?$/;
 
 // '1.234,56' (ponto de milhar) e '1.50' (ponto decimal) chegam os dois aqui. A virgula desempata:
 function toCents(s) {
@@ -93,6 +95,7 @@ export function parse(msg, { rules, hoje }) {
 		data = hoje;
 	let numeros = 0,
 		datas = 0,
+		metodos = 0,
 		dataRuim = false;
 	const sobra = [];
 
@@ -108,8 +111,10 @@ export function parse(msg, { rules, hoje }) {
 
 		// Uma rule que o usuario ensinou tem prioridade sobre o alias de metodo embutido: a rule e
 		// escolha dele, o alias e chute nosso.
-		if (!method && !rules.has(tk) && isMetodo(tk)) {
-			method = METODOS[tk];
+		if (!rules.has(tk) && isMetodo(tk)) {
+			// Conta todo alias, mesmo com o metodo ja preenchido.
+			metodos++;
+			if (!method) method = METODOS[tk];
 			continue;
 		}
 
@@ -126,10 +131,12 @@ export function parse(msg, { rules, hoje }) {
 
 		const md = tk.match(RE_DATA);
 		if (md) {
-			// O ano nunca vem da mensagem: dd/mm sempre cai no ano corrente.
 			datas++;
-			const iso = ddmmParaIso(+md[1], +md[2], hoje.slice(0, 4));
-			if (iso) data = iso;
+			// Ano ausente cai no corrente, como sempre foi. ddmmParaIso ja recusa o que nao tem 4 digitos (o
+			// porque esta no comentario dele:
+			const iso = ddmmParaIso(+md[1], +md[2], md[3] ?? hoje.slice(0, 4));
+			// So o ano corrente entra.
+			if (iso && iso.slice(0, 4) === hoje.slice(0, 4)) data = iso;
 			else dataRuim = true;
 			continue;
 		}
@@ -151,6 +158,10 @@ export function parse(msg, { rules, hoje }) {
 	if (cents <= 0) return { ok: false, reason: 'sem_valor' };
 	if (dataRuim) return { ok: false, reason: 'data_invalida' };
 	if (datas > 1) return { ok: false, reason: 'data_ambigua' };
+	// Metodo por ultimo porque e o campo menos danoso de errar: valor errado mente sobre quanto, data
+	// errada mente sobre o mes, metodo errado mexe so na divisao entre 'sai da conta agora' e 'vai pra
+	// fatura'.
+	if (metodos > 1) return { ok: false, reason: 'metodo_ambiguo' };
 
 	// Duas palavras da descricao podem ser regras. Ganha a mais usada:
 	let hit = null;
