@@ -43,9 +43,9 @@ async function loadRules(env) {
 	return new Map(results.map((r) => [r.keyword, r]));
 }
 
-// As categorias mais usadas viram os botoes de atalho. O left join e o que faz categoria
+// Todas as categorias viram botao, ordenadas por uso. O left join e o que faz categoria
 // recem-criada (uso = 0) tambem aparecer.
-async function topCategorias(env, n = 4) {
+async function categoriasPorUso(env) {
 	const { results } = await env.DB.prepare(
 		`
     select c.id, c.name, count(t.id) as uso
@@ -53,12 +53,16 @@ async function topCategorias(env, n = 4) {
     left join transactions t on t.category_id = c.id
     group by c.id
     order by uso desc, c.name
-    limit ?
   `,
-	)
-		.bind(n)
-		.all();
+	).all();
 	return results;
+}
+
+// Quebra a lista em linhas de no maximo dois botoes.
+export function emLinhas(botoes, porLinha = 2) {
+	const linhas = [];
+	for (let i = 0; i < botoes.length; i += porLinha) linhas.push(botoes.slice(i, i + porLinha));
+	return linhas;
 }
 
 // Palavra = so letras e digitos, com pelo menos uma letra. Barra exatamente o que o parser ja
@@ -82,11 +86,10 @@ function resumo(cents, catNome, method, iso) {
 
 /* Monta o teclado com o que ainda falta preencher na transacao. Recebe o estado ja lido em vez de
    ler do banco de novo: */
-function teclado(txId, temCategoria, temMetodo, cats = []) {
+export function teclado(txId, temCategoria, temMetodo, cats = []) {
 	const linhas = [];
 	if (!temCategoria) {
-		const btn = cats.map((c) => ({ text: c.name, callback_data: `cat:${txId}:${c.id}` }));
-		linhas.push(btn.slice(0, 2), btn.slice(2, 4));
+		linhas.push(...emLinhas(cats.map((c) => ({ text: c.name, callback_data: `cat:${txId}:${c.id}` }))));
 	}
 	if (!temMetodo) {
 		linhas.push(
@@ -101,8 +104,18 @@ function teclado(txId, temCategoria, temMetodo, cats = []) {
 }
 
 async function onMessage(msg, env) {
-	const texto = (msg.text ?? '').trim();
-	if (!texto) return;
+	// caption entra junto com text.
+	const texto = (msg.text ?? msg.caption ?? '').trim();
+
+	// O 'return' mudo que morava aqui era, do lado do usuario, indistinguivel de bot fora do ar:
+	// mandava foto do comprovante, audio, documento, e nada acontecia.
+	if (!texto) {
+		await tg(env, 'sendMessage', {
+			chat_id: msg.chat.id,
+			text: 'Sem texto pra ler. Se for comprovante, manda o valor na legenda: 120 mercado 12/08 credito',
+		});
+		return;
+	}
 
 	// Uma so leitura do relogio por mensagem: se o parser pedisse a data de novo pra cada token, uma
 	// mensagem na virada da meia-noite poderia usar dois dias diferentes.
@@ -244,7 +257,7 @@ async function onMessage(msg, env) {
 	const cat = p.category_id ? await env.DB.prepare('select name from categories where id = ?').bind(p.category_id).first() : null;
 
 	// So busca os atalhos se ainda faltar categoria.
-	const cats = p.category_id ? [] : await topCategorias(env);
+	const cats = p.category_id ? [] : await categoriasPorUso(env);
 
 	await tg(env, 'sendMessage', {
 		chat_id: msg.chat.id,
@@ -255,10 +268,23 @@ async function onMessage(msg, env) {
 
 // Clique de botao volta como callback_query trazendo de volta o callback_data que teclado() montou:
 // '<acao>:<txId>:<valor>'.
+const ACOES = new Set(['cat', 'pay', 'del']);
+
 async function onCallback(cb, env) {
-	const [acao, txId, valor] = cb.data.split(':');
 	// O Telegram deixa o botao com a ampulheta girando ate receber este ack.
 	const ack = (t) => tg(env, 'answerCallbackQuery', { callback_query_id: cb.id, text: t });
+
+	// callback_data volta do Telegram como texto solto, e nada garante que saiu do teclado() deste
+	// arquivo. Um 'foo:42:x' passava pela busca da transacao, nao casava com ramo nenhum, e ainda
+	// assim caia no ack('ok') + editMessageText do fim:
+	const partes = (cb.data ?? '').split(':');
+	if (partes.length !== 3 || !ACOES.has(partes[0])) return ack('acao invalida');
+	const [acao, , valor] = partes;
+
+	// Number e nao a string crua: este id vai pra comparacao com coluna integer, e mais abaixo pro
+	// objeto tx, de onde alimenta o teclado.
+	const txId = Number(partes[1]);
+	if (!Number.isInteger(txId) || txId <= 0) return ack('acao invalida');
 
 	const tx = await env.DB.prepare('select * from transactions where id = ?').bind(txId).first();
 	// Some quando o usuario clica num botao de mensagem antiga cuja transacao ja foi apagada.
@@ -295,23 +321,31 @@ async function onCallback(cb, env) {
 		if (!cat) return ack('categoria invalida');
 
 		// parser vira 'manual' e confidence 1: foi o usuario quem disse, nao o regex.
-		await env.DB.prepare('update transactions set category_id = ?, parser = ?, confidence = 1 where id = ?')
-			.bind(valor, 'manual', txId)
+		const upd = await env.DB.prepare(
+			`update transactions set category_id = ?, parser = ?, confidence = 1
+        where id = ? and (category_id is null or category_id <> ?)`,
+		)
+			.bind(cat.id, 'manual', txId, cat.id)
 			.run();
-		tx.category_id = valor;
+
+		// cat.id e nao 'valor': valor e a string crua do callback_data, e daqui ela ia direto pro objeto
+		// tx e dali pro teclado.
+		tx.category_id = cat.id;
 
 		// Aprende com a correcao: precisar clicar no botao significa que o parser errou.
-		const kw = keywordDe(tx.description);
-		if (kw) {
-			await env.DB.prepare(
-				`
+		if (upd.meta.changes === 1) {
+			const kw = keywordDe(tx.description);
+			if (kw) {
+				await env.DB.prepare(
+					`
         insert into category_rules (keyword, category_id, hits) values (?, ?, 1)
         on conflict(keyword) do update
           set category_id = excluded.category_id, hits = hits + 1
       `,
-			)
-				.bind(kw, valor)
-				.run();
+				)
+					.bind(kw, cat.id)
+					.run();
+			}
 		}
 	}
 
@@ -319,7 +353,7 @@ async function onCallback(cb, env) {
 	// mexe so no metodo mas precisa reexibir a categoria que a transacao ja tinha.
 	cat ??= tx.category_id ? await env.DB.prepare('select name from categories where id = ?').bind(tx.category_id).first() : null;
 
-	const cats = tx.category_id ? [] : await topCategorias(env);
+	const cats = tx.category_id ? [] : await categoriasPorUso(env);
 
 	await ack('ok');
 	await tg(env, 'editMessageText', {
