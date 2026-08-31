@@ -44,14 +44,14 @@ function toCents(s) {
 	return Math.round(parseFloat(s) * 100);
 }
 
-/* Valor isolado ('800', '42,90', 'R$ 1.234,56') -> centavos, ou null se o texto nao for um valor.
-   Reusa o RE_VALOR do parser de propria proposito: */
+// O preparo que toda entrada de valor atravessa, seja a mensagem inteira ou o token solto do
+// /orcamento. Existe como funcao porque centavos() refazia dois dos passos do norm() na mao e
+// repetia o colapso do 'r$':
+const preparado = (s) => norm(String(s)).replace(/r\$\s*/g, 'r$');
+
+/* Valor isolado ('800', '42,90', 'R$ 1.234,56') -> centavos, ou null se o texto nao for um valor. */
 export function centavos(txt) {
-	const m = String(txt)
-		.toLowerCase()
-		.replace(/r\$\s*/g, 'r$')
-		.trim()
-		.match(RE_VALOR);
+	const m = preparado(txt).match(RE_VALOR);
 	return m ? toCents(m[1]) : null;
 }
 
@@ -85,10 +85,7 @@ function ddmmParaIso(dia, mes, ano) {
 
 /* Le uma mensagem solta e devolve a transacao pronta, ou o motivo da recusa. Formato: */
 export function parse(msg, { rules, hoje }) {
-	const tokens = norm(msg)
-		.replace(/r\$\s*/g, 'r$')
-		.split(' ')
-		.filter(Boolean);
+	const tokens = preparado(msg).split(' ').filter(Boolean);
 
 	let cents = null,
 		method = null,
@@ -97,6 +94,9 @@ export function parse(msg, { rules, hoje }) {
 		datas = 0,
 		metodos = 0,
 		dataRuim = false;
+	// Uma leitura do ano por mensagem, do mesmo jeito que handle.js le o relogio uma vez so: dois
+	// tokens de data na mesma mensagem tem que ser julgados pelo mesmo ano.
+	const ANO = hoje.slice(0, 4);
 	const sobra = [];
 
 	for (const tk of tokens) {
@@ -132,11 +132,9 @@ export function parse(msg, { rules, hoje }) {
 		const md = tk.match(RE_DATA);
 		if (md) {
 			datas++;
-			// Ano ausente cai no corrente, como sempre foi. ddmmParaIso ja recusa o que nao tem 4 digitos (o
-			// porque esta no comentario dele:
-			const iso = ddmmParaIso(+md[1], +md[2], md[3] ?? hoje.slice(0, 4));
-			// So o ano corrente entra.
-			if (iso && iso.slice(0, 4) === hoje.slice(0, 4)) data = iso;
+			// Ano ausente cai no corrente, como sempre foi. Ano escrito tem que ser exatamente o corrente:
+			const iso = (md[3] ?? ANO) === ANO ? ddmmParaIso(+md[1], +md[2], ANO) : null;
+			if (iso) data = iso;
 			else dataRuim = true;
 			continue;
 		}

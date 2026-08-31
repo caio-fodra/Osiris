@@ -1,11 +1,11 @@
-import { parse, centavos, LABEL, isMetodo, rotulo } from './parser.js';
+import { parse, centavos, norm, LABEL, isMetodo, rotulo } from './parser.js';
 import { brl, dia } from './fmt.js';
 import { relatorio, resolveMes } from './report.js';
 
 const API = (t) => `https://api.telegram.org/bot${t}`;
 
 // Todo contato com o Telegram passa por aqui. Falha de API nao lanca, so loga:
-async function tg(env, method, body) {
+export async function tg(env, method, body) {
 	const r = await fetch(`${API(env.TELEGRAM_TOKEN)}/${method}`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
@@ -17,14 +17,14 @@ async function tg(env, method, body) {
 
 // O Worker roda em UTC, o usuario vive em Sao Paulo. Sem esta conversao todo gasto lancado depois
 // das 21h locais cairia no dia seguinte.
-function hojeSP() {
-	return new Intl.DateTimeFormat('en-CA', {
-		timeZone: 'America/Sao_Paulo',
-		year: 'numeric',
-		month: '2-digit',
-		day: '2-digit',
-	}).format(new Date());
-}
+const FORMATO_DIA_SP = new Intl.DateTimeFormat('en-CA', {
+	timeZone: 'America/Sao_Paulo',
+	year: 'numeric',
+	month: '2-digit',
+	day: '2-digit',
+});
+
+const hojeSP = () => FORMATO_DIA_SP.format(new Date());
 
 // Cada recusa do parser vira uma frase que repete o formato certo: a mensagem de erro e a unica
 // documentacao que o usuario le.
@@ -65,6 +65,17 @@ export function emLinhas(botoes, porLinha = 2) {
 	return linhas;
 }
 
+/* As duas unicas funcoes que tocam a chave de categoria, e a razao de existirem: a migration 0004
+   fez de name_norm a chave real, mas nenhum CHECK pode garantir que ela esteja normalizada. */
+async function criarCategoria(env, nome) {
+	const limpo = nome.replace(/\s+/g, ' ').trim().slice(0, 40);
+	// 'or ignore' e nao 'on conflict(...) do nothing': existem dois indices unicos aqui (name, da
+	// 0001, e name_norm, da 0004).
+	await env.DB.prepare('insert or ignore into categories (name, name_norm) values (?, ?)').bind(limpo, norm(limpo)).run();
+}
+
+const acharCategoria = (env, nome) => env.DB.prepare('select id, name from categories where name_norm = ?').bind(norm(nome)).first();
+
 // Palavra = so letras e digitos, com pelo menos uma letra. Barra exatamente o que o parser ja
 // consumiu ou o que nunca casaria de volta como keyword:
 const ePalavra = (w) => /^[a-z0-9]+$/.test(w) && /[a-z]/.test(w);
@@ -84,26 +95,37 @@ function resumo(cents, catNome, method, iso) {
 	return `R$ ${brl(cents)} · ${catNome ?? 'sem categoria'}` + ` · ${rotulo(method) ?? 'sem método'} · ${dia(iso)}`;
 }
 
+/* O vocabulario de acao de botao, em UM lugar. teclado() produz, onCallback valida e o teste
+   confere. */
+export const ACAO = { CAT: 'cat', PAY: 'pay', DEL: 'del' };
+
+// Set e nao objeto literal: a acao vem de fora e num objeto literal 'constructor' acharia valor
+// herdado do prototipo.
+export const ACOES = new Set(Object.values(ACAO));
+
 /* Monta o teclado com o que ainda falta preencher na transacao. Recebe o estado ja lido em vez de
    ler do banco de novo: */
 export function teclado(txId, temCategoria, temMetodo, cats = []) {
 	const linhas = [];
 	if (!temCategoria) {
-		linhas.push(...emLinhas(cats.map((c) => ({ text: c.name, callback_data: `cat:${txId}:${c.id}` }))));
+		linhas.push(...emLinhas(cats.map((c) => ({ text: c.name, callback_data: `${ACAO.CAT}:${txId}:${c.id}` }))));
 	}
 	if (!temMetodo) {
+		// Passa pelo mesmo emLinhas das categorias, com porLinha=4. Saida byte a byte identica hoje (sao
+		// exatamente quatro metodos), mas um quinto metodo passa a quebrar linha em vez de esparramar
+		// numa fileira de cinco ao lado de fileiras de dois.
 		linhas.push(
-			Object.keys(LABEL).map((m) => ({
-				text: LABEL[m],
-				callback_data: `pay:${txId}:${m}`,
-			})),
+			...emLinhas(
+				Object.keys(LABEL).map((m) => ({ text: LABEL[m], callback_data: `${ACAO.PAY}:${txId}:${m}` })),
+				4,
+			),
 		);
 	}
-	linhas.push([{ text: 'apagar', callback_data: `del:${txId}:` }]);
+	linhas.push([{ text: 'apagar', callback_data: `${ACAO.DEL}:${txId}:` }]);
 	return linhas.filter((l) => l.length);
 }
 
-async function onMessage(msg, env) {
+async function onMessage(msg, env, updateId) {
 	// caption entra junto com text.
 	const texto = (msg.text ?? msg.caption ?? '').trim();
 
@@ -139,7 +161,7 @@ async function onMessage(msg, env) {
 		if (nome) {
 			// 'do nothing' e nao 'do update': repetir /categoria mercado e o jeito natural de perguntar se
 			// ela ja existe, e nao pode dar erro.
-			await env.DB.prepare('insert into categories (name) values (?) on conflict(name) do nothing').bind(nome.slice(0, 40)).run();
+			await criarCategoria(env, nome);
 		}
 		const { results } = await env.DB.prepare('select name from categories order by name').all();
 		await tg(env, 'sendMessage', {
@@ -180,11 +202,10 @@ async function onMessage(msg, env) {
 			return;
 		}
 
-		// collate nocase pro usuario nao precisar lembrar como digitou no /categoria. O nome ecoado na
-		// resposta e o do cadastro, nao o que ele acabou de mandar, pra ficar claro qual categoria foi
-		// atingida.
+		// Busca por name_norm e nao 'collate nocase': o nocase do SQLite dobra so ASCII, entao com ele
+		// '/orcamento saude' nao acharia 'Saúde'.
 		const nome = partes.slice(0, -1).join(' ');
-		const cat = await env.DB.prepare('select id, name from categories where name = ? collate nocase').bind(nome).first();
+		const cat = await acharCategoria(env, nome);
 
 		if (!cat) {
 			await tg(env, 'sendMessage', {
@@ -248,7 +269,7 @@ async function onMessage(msg, env) {
     returning id
   `,
 	)
-		.bind(p.amount_cents, p.occurred_on, p.category_id, p.method, p.description, texto, p.parser, p.confidence, msg._update_id)
+		.bind(p.amount_cents, p.occurred_on, p.category_id, p.method, p.description, texto, p.parser, p.confidence, updateId)
 		.first();
 
 	// Sem linha = o update ja tinha sido processado. Sair calado e o certo:
@@ -256,7 +277,7 @@ async function onMessage(msg, env) {
 
 	const cat = p.category_id ? await env.DB.prepare('select name from categories where id = ?').bind(p.category_id).first() : null;
 
-	// So busca os atalhos se ainda faltar categoria.
+	// So busca as categorias se ainda faltar uma.
 	const cats = p.category_id ? [] : await categoriasPorUso(env);
 
 	await tg(env, 'sendMessage', {
@@ -268,8 +289,6 @@ async function onMessage(msg, env) {
 
 // Clique de botao volta como callback_query trazendo de volta o callback_data que teclado() montou:
 // '<acao>:<txId>:<valor>'.
-const ACOES = new Set(['cat', 'pay', 'del']);
-
 async function onCallback(cb, env) {
 	// O Telegram deixa o botao com a ampulheta girando ate receber este ack.
 	const ack = (t) => tg(env, 'answerCallbackQuery', { callback_query_id: cb.id, text: t });
@@ -278,19 +297,15 @@ async function onCallback(cb, env) {
 	// arquivo. Um 'foo:42:x' passava pela busca da transacao, nao casava com ramo nenhum, e ainda
 	// assim caia no ack('ok') + editMessageText do fim:
 	const partes = (cb.data ?? '').split(':');
-	if (partes.length !== 3 || !ACOES.has(partes[0])) return ack('acao invalida');
-	const [acao, , valor] = partes;
-
-	// Number e nao a string crua: este id vai pra comparacao com coluna integer, e mais abaixo pro
-	// objeto tx, de onde alimenta o teclado.
 	const txId = Number(partes[1]);
-	if (!Number.isInteger(txId) || txId <= 0) return ack('acao invalida');
+	if (partes.length !== 3 || !ACOES.has(partes[0]) || !Number.isInteger(txId)) return ack('acao invalida');
+	const [acao, , valor] = partes;
 
 	const tx = await env.DB.prepare('select * from transactions where id = ?').bind(txId).first();
 	// Some quando o usuario clica num botao de mensagem antiga cuja transacao ja foi apagada.
 	if (!tx) return ack('sumiu');
 
-	if (acao === 'del') {
+	if (acao === ACAO.DEL) {
 		await env.DB.prepare('delete from transactions where id = ?').bind(txId).run();
 		await ack('apagado');
 		// Troca o texto pra mensagem antiga nao continuar parecendo um gasto vivo.
@@ -303,7 +318,7 @@ async function onCallback(cb, env) {
 
 	// Os dois ramos abaixo atualizam o banco e tambem o objeto tx em memoria, porque o resumo e o
 	// teclado logo adiante sao montados a partir dele.
-	if (acao === 'pay') {
+	if (acao === ACAO.PAY) {
 		// callback_data volta do Telegram como texto solto: nada garante que e uma das strings que
 		// teclado() montou.
 		if (!rotulo(valor)) return ack('metodo invalido');
@@ -315,7 +330,7 @@ async function onCallback(cb, env) {
 	// o resumo.
 	let cat = null;
 
-	if (acao === 'cat') {
+	if (acao === ACAO.CAT) {
 		// Mesma desconfianca do 'pay': o id da categoria vem do callback_data e pode ser forjado.
 		cat = await env.DB.prepare('select id, name from categories where id = ?').bind(valor).first();
 		if (!cat) return ack('categoria invalida');
@@ -375,13 +390,9 @@ export async function handle(upd, env) {
 		// Os await nao sao decoracao. Com 'return onCallback(...)' a promise sai do frame do try e a
 		// rejeicao dela passaria longe deste catch.
 		if (upd.callback_query) return await onCallback(upd.callback_query, env);
-		if (upd.message) {
-			// O update_id viaja grudado na mensagem so pra chegar ao insert como tg_update_id: e ele que
-			// torna o processamento idempotente.
-			upd.message._update_id = upd.update_id;
-			return await onMessage(upd.message, env);
-		}
-		// Qualquer outro tipo de update (entrada em grupo, enquete) e ignorado.
+		// O update_id vai como parametro e nao grudado no objeto.
+		if (upd.message) return await onMessage(upd.message, env, upd.update_id);
+		// Qualquer outro tipo de update (edicao de mensagem, entrada em grupo, enquete) e ignorado.
 		console.log('update ignorado:', Object.keys(upd).join(','));
 	} catch (e) {
 		console.error('handle falhou', e);

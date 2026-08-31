@@ -1,9 +1,9 @@
--- Dois fechamentos num rebuild so de transactions.
+-- amount_cents nao tinha CHECK: quem barrava valor <= 0 era uma linha do parser.js, e
+-- todo caminho de escrita novo precisaria lembrar da mesma regra. Um gasto de 0 nao
+-- aparece em relatorio e um negativo diminui o total do mes.
 
--- 1. reparo antes da constraint:
-delete from transactions where amount_cents <= 0;
-
--- 2. rebuild.
+-- rebuild nao herda nada: confira o schema real, nao a memoria. Os dois CHECKs da 0002 e
+-- os indices sao reescritos aqui, senao somem.
 create table transactions_novo (
   id integer primary key autoincrement,
   amount_cents integer not null check (amount_cents > 0),
@@ -15,22 +15,23 @@ create table transactions_novo (
   parser text not null,
   confidence real,
   tg_update_id integer unique,
-  tg_message_id integer,
   created_at text not null default (datetime('now'))
 );
 
--- tg_message_id fica de fora da lista: a coluna e nova e as linhas antigas nao tem esse dado.
+-- O filtro no proprio insert-select e o reparo: a tabela antiga vai ser dropada mesmo.
+-- Nao ha reparo defensavel pra valor 0 ou negativo, a linha nao diz quanto foi o gasto.
+-- Ids explicitos, entao o sqlite_sequence continua de onde parou.
+--   select count(*) from transactions where amount_cents <= 0;
 insert into transactions_novo
   (id, amount_cents, occurred_on, category_id, method, description,
    raw_message, parser, confidence, tg_update_id, created_at)
 select id, amount_cents, occurred_on, category_id, method, description,
        raw_message, parser, confidence, tg_update_id, created_at
-  from transactions;
+  from transactions
+ where amount_cents > 0;
 
 drop table transactions;
 alter table transactions_novo rename to transactions;
 
 create index idx_tx_data on transactions(occurred_on);
 create index idx_tx_cat on transactions(category_id);
--- Indice novo: onEdit procura por tg_message_id em toda edicao de mensagem.
-create index idx_tx_msg on transactions(tg_message_id);

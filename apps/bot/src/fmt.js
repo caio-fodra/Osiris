@@ -1,9 +1,7 @@
 // Centavos -> '1.234,56'. Nunca use toFixed aqui:
-export const brl = (c) =>
-	(c / 100).toLocaleString('pt-BR', {
-		minimumFractionDigits: 2,
-		maximumFractionDigits: 2,
-	});
+const FORMATO_BRL = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+export const brl = (c) => FORMATO_BRL.format(c / 100);
 
 // '2026-08-12' -> '12/08'.
 export const dia = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;

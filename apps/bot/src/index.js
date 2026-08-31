@@ -1,4 +1,4 @@
-import { handle, chatDe } from './handle.js';
+import { handle, chatDe, tg } from './handle.js';
 
 export default {
 	async fetch(req, env, ctx) {
@@ -37,60 +37,54 @@ export default {
 		return new Response('not found', { status: 404 });
 	},
 
-	// Backup semanal (o cron esta em wrangler.jsonc). Vai como arquivo anexado e nao como texto porque
-	// mensagem do Telegram para em 4096 caracteres, e o dump passa disso rapido.
-	async scheduled(event, env, ctx) {
-		ctx.waitUntil(
-			(async () => {
-				// As tres tabelas, nao so transactions.
-				const [tx, cats, rules] = await env.DB.batch([
-					env.DB.prepare(
-						`select t.*, c.name as categoria
-             from transactions t
-             left join categories c on c.id = t.category_id
-            order by t.id`,
-					),
-					env.DB.prepare('select * from categories order by id'),
-					env.DB.prepare('select * from category_rules order by keyword'),
-				]);
-
-				const dump = {
-					// versao muda a forma do arquivo: todo backup anterior a este commit e um array de lancamentos
-					// na raiz, sem categoria nem regra.
-					versao: 2,
-					gerado_em: new Date().toISOString(),
-					transactions: tx.results,
-					categories: cats.results,
-					category_rules: rules.results,
-				};
-
-				const fd = new FormData();
-				fd.append('chat_id', env.MY_CHAT_ID);
-				fd.append(
-					'caption',
-					`backup · ${dump.transactions.length} lançamentos · ${dump.categories.length} categorias · ${dump.category_rules.length} regras`,
-				);
-				fd.append(
-					'document',
-					new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' }),
-					`osiris-${new Date().toISOString().slice(0, 10)}.json`,
-				);
-
-				const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendDocument`, { method: 'POST', body: fd });
-				if (!r.ok) {
-					// Um cron que falha calado sao meses sem backup sem ninguem notar. O log fica pro diagnostico
-					// e a mensagem avisa quem precisa saber.
-					console.error('backup falhou', r.status, await r.text());
-					await fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendMessage`, {
-						method: 'POST',
-						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify({
-							chat_id: env.MY_CHAT_ID,
-							text: `O backup semanal falhou (HTTP ${r.status}). O banco está intacto; é o envio que não foi.`,
-						}),
-					}).catch((e) => console.error('aviso de falha de backup tambem falhou', e));
-				}
-			})(),
-		);
+	async scheduled(controller, env, ctx) {
+		ctx.waitUntil(backup(env).catch((e) => console.error('backup falhou', e)));
 	},
 };
+
+/* Backup semanal (o cron esta em wrangler.jsonc). Vai como arquivo anexado e nao como texto porque
+   mensagem do Telegram para em 4096 caracteres, e o dump passa disso rapido. */
+async function backup(env) {
+	// todas as tabelas da aplicacao, descobertas e nao listadas.
+	const { results: tabelas } = await env.DB.prepare(
+		`select name from sqlite_master
+      where type = 'table'
+        and name not like 'sqlite_%'
+        and name not like '\_cf\_%' escape ''
+        and name <> 'd1_migrations'
+      order by name`,
+	).all();
+
+	// O nome vai interpolado porque bind nao vale pra identificador.
+	const dados = await env.DB.batch(tabelas.map((t) => env.DB.prepare(`select * from "${t.name}"`)));
+
+	// Uma leitura do relogio, usada no campo e no nome do arquivo. Com duas, um cron disparando
+	// 23:59:59.9xx UTC podia estampar uma data no gerado_em e outra no nome.
+	const agora = new Date().toISOString();
+
+	// versao muda a forma do arquivo: todo backup anterior a este commit e um array de lancamentos na
+	// raiz, sem categoria nem regra.
+	const dump = { versao: 2, gerado_em: agora };
+	tabelas.forEach((t, i) => {
+		dump[t.name] = dados[i].results;
+	});
+
+	const fd = new FormData();
+	fd.append('chat_id', env.MY_CHAT_ID);
+	// Caption pelas mesmas tabelas descobertas: nada a atualizar quando entrar uma nova.
+	fd.append('caption', `backup · ${tabelas.map((t, i) => `${dados[i].results.length} ${t.name}`).join(' · ')}`);
+	// JSON.stringify sem o argumento de indentacao: ela custa ~29% mais bytes e tira o V8 do
+	// serializador rapido, e este cron tem 10 ms de CPU no plano free.
+	fd.append('document', new Blob([JSON.stringify(dump)], { type: 'application/json' }), `osiris-${agora.slice(0, 10)}.json`);
+
+	const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendDocument`, { method: 'POST', body: fd });
+	if (!r.ok) {
+		// Um cron que falha calado sao meses sem backup sem ninguem notar. O log fica pro diagnostico e a
+		// mensagem avisa quem precisa saber.
+		console.error('sendDocument falhou', r.status, await r.text());
+		await tg(env, 'sendMessage', {
+			chat_id: env.MY_CHAT_ID,
+			text: `O backup semanal falhou (HTTP ${r.status}). O banco está intacto; é o envio que não foi.`,
+		}).catch((e) => console.error('aviso de falha de backup tambem falhou', e));
+	}
+}
