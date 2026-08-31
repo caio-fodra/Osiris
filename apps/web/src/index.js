@@ -22,16 +22,14 @@ export default {
 				return json(await dadosDoMes(env, m));
 			}
 
-			// Endpoint de diagnóstico. Útil se algo parar de bater com o banco.
-			if (url.pathname === '/api/schema') {
-				const { results } = await env.DB.prepare("SELECT name, sql FROM sqlite_master WHERE type='table'").all();
-				return json(results);
-			}
+			// Nao existe mais um /api/schema. Ele dumpava o CREATE TABLE de tudo para quem pedisse.
 
 			return json({ error: 'Rota não encontrada.' }, 404);
 		} catch (err) {
-			// Devolve a mensagem real do D1 para facilitar o diagnóstico.
-			return json({ error: err?.message ?? String(err) }, 500);
+			// A mensagem real vai para o log, nao para o cliente: err.message do D1 traz nome de tabela e
+			// trecho de SQL, que e mapa de graca para quem sondar a API.
+			console.error('erro em', url.pathname, err);
+			return json({ error: 'Erro interno.' }, 500);
 		}
 	},
 };
