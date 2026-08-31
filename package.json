@@ -17,6 +17,7 @@
     "db:reset": "node scripts/reset.mjs",
     "db:reset:seeded": "node scripts/reset.mjs --seeded-only",
     "backup": "wrangler d1 export osiris-db --remote --output osiris-backup.sql -c apps/bot/wrangler.jsonc",
+    "restore": "node scripts/restore.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
