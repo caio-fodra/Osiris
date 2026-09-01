@@ -1,5 +1,4 @@
-// Quantos lançamentos a tabela do mês carrega no máximo.
-const LIMITE_LANCAMENTOS = 300;
+const LIMITE_LANCAMENTOS = 300; // teto da tabela do mes
 
 export default {
 	async fetch(request, env) {
@@ -22,22 +21,19 @@ export default {
 				return json(await dadosDoMes(env, m));
 			}
 
-			// Nao existe mais um /api/schema. Ele dumpava o CREATE TABLE de tudo para quem pedisse.
-
 			return json({ error: 'Rota não encontrada.' }, 404);
 		} catch (err) {
-			// A mensagem real vai para o log, nao para o cliente: err.message do D1 traz nome de tabela e
-			// trecho de SQL, que e mapa de graca para quem sondar a API.
+			// A mensagem real so vai pro log: err.message do D1 traz nome de tabela e trecho de
+			// SQL. O log fica no painel do Worker, que e autenticado.
 			console.error('erro em', url.pathname, err);
 			return json({ error: 'Erro interno.' }, 500);
 		}
 	},
 };
 
-// --- Consultas ------------------------------------------------------------
+// --- consultas ------------------------------------------------------------
 
-// Todos os meses que têm lançamentos, em ordem crescente. Alimenta o seletor de mês e o gráfico de
-// evolução.
+// Alimenta o seletor de mes e o grafico de evolucao.
 async function listarMeses(env) {
 	const { results } = await env.DB.prepare(
 		`SELECT substr(occurred_on, 1, 7) AS month,
@@ -97,10 +93,14 @@ async function dadosDoMes(env, m) {
 		n: totais?.n ?? 0,
 		categories: categorias.results ?? [],
 		transactions: lancamentos.results ?? [],
+		// O `n` acima conta o mes inteiro e a lista para em LIMITE_LANCAMENTOS, entao o front
+		// precisa saber disso pra avisar. Compara com o total e nao com o tamanho da lista,
+		// senao um mes com exatamente 300 daria falso positivo.
+		truncated: (totais?.n ?? 0) > LIMITE_LANCAMENTOS,
 	};
 }
 
-// --- Utilitário -----------------------------------------------------------
+// --- json -----------------------------------------------------------------
 
 function json(body, status = 200) {
 	return new Response(JSON.stringify(body), {

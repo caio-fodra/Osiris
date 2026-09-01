@@ -600,7 +600,7 @@
 
 					<section class="panel panel--wide reveal" style="--delay: 180ms">
 						<h2 class="label">Evolução</h2>
-						<p class="hint">Total por mês, últimos doze meses com registro.</p>
+						<p class="hint">Total por mês, os doze meses com registro até o mês aberto.</p>
 						<div class="plot" id="lineBox"><div class="skel skel--plot"></div></div>
 					</section>
 				</div>
@@ -615,7 +615,13 @@
 			<p class="msg" id="msg" hidden></p>
 		</main>
 
-		<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+		<!-- Versao exata e nao '@4': com a faixa flutuante, o jsdelivr entrega o que for a ultima 4.x no
+		   dia, e a pagina que desenha o extrato inteiro passa a rodar codigo que ninguem reviu. -->
+		<script
+			src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+			integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+			crossorigin="anonymous"
+		></script>
 		<script>
 			(function () {
 				'use strict';
@@ -736,6 +742,11 @@
 
 				function api(rota) {
 					return fetch(rota).then(function (r) {
+						/* Checa o tipo antes de parsear. Com o Cloudflare Access na frente, sessao expirada nao
+						   devolve 401 com JSON: */
+						if ((r.headers.get('content-type') || '').indexOf('application/json') === -1) {
+							throw new Error('a sessão expirou — recarregue a página para entrar de novo.');
+						}
 						return r.json().then(function (corpo) {
 							if (!r.ok) throw new Error(corpo && corpo.error ? corpo.error : 'Erro ' + r.status);
 							return corpo;
@@ -990,7 +1001,13 @@
 				}
 
 				function pintaLinha(atual) {
-					var janela = meses.slice(-12);
+					/* Janela ancorada no mes aberto, nao na cauda de `meses`: desde a 0008 a cauda pode ser 23
+					   meses de parcela futura, e ai o ponto de "voce esta aqui" ficava fora do grafico. */
+					var fim = meses.findIndex(function (m) {
+						return m.month === atual;
+					});
+					if (fim < 0) fim = meses.length - 1;
+					var janela = meses.slice(Math.max(0, fim - 11), fim + 1);
 					plota('lineBox', {
 						type: 'line',
 						data: {
@@ -1074,6 +1091,10 @@
 						})
 						.join('');
 
+					/* O aviso de corte: a API manda `truncated` quando o mes tem mais lancamentos que o
+					   LIMITE_LANCAMENTOS dela. */
+					var corte = mes.truncated ? '<p class="msg">Mostrando os ' + lista.length + ' mais recentes de ' + mes.n + '.</p>' : '';
+
 					el.table.innerHTML =
 						'<table>' +
 						"<colgroup><col class='col-date'><col><col><col class='col-method'><col class='col-value'></colgroup>" +
@@ -1082,7 +1103,8 @@
 						'<tbody>' +
 						corpo +
 						'</tbody>' +
-						'</table>';
+						'</table>' +
+						corte;
 				}
 
 				/* ---- navegação ----------------------------------------------------- */
@@ -1191,7 +1213,16 @@
 							.join('');
 
 						revela();
-						return vaiPara(meses.length - 1);
+						/* Nao e mais `meses.length - 1`: desde a migration 0008 as parcelas 2..N gravam linha em
+						   meses que ainda nao aconteceram, entao a cauda da lista deixou de ser o mes corrente. */
+						var hojeYM = new Intl.DateTimeFormat('en-CA', {
+							timeZone: 'America/Sao_Paulo',
+							year: 'numeric',
+							month: '2-digit',
+						}).format(new Date());
+						var inicial = 0;
+						for (var i = 0; i < meses.length; i++) if (meses[i].month <= hojeYM) inicial = i;
+						return vaiPara(inicial);
 					})
 					.catch(function (e) {
 						falha(e);

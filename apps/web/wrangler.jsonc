@@ -4,6 +4,16 @@
 	"main": "src/index.js",
 	"compatibility_date": "2026-08-28",
 
+	// Mesmas duas chaves do bot. O catch de /api/* faz `console.error('erro em', ...)` de propósito.
+	"observability": { "enabled": true },
+	"upload_source_maps": true,
+
+	// Explícitos, e não pelo default, porque o default escondia superfície de rede: sem estas duas
+	// linhas ninguém lendo este arquivo descobre que existe uma URL pública, nem que `preview_urls`
+	// segue o `workers_dev`.
+	"workers_dev": true,
+	"preview_urls": true,
+
 	"assets": {
 		"directory": "./public/",
 		"binding": "ASSETS",
