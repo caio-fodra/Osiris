@@ -38,11 +38,11 @@ const RE_VALOR = /^(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+,\d{2}|\d+(?:[.,]\d{1,2})?)$/;
 const RE_DATA = /^(\d{1,2})\/(\d{1,2})(?:\/(\d*))?$/;
 
 // '3x', '12x'. Nao colide com RE_VALOR:
-const RE_PARCELAS = /^(\d{1,3})x$/;
+const RE_PARCELAS = /^(\d+)x$/;
 
 // 24 = dois anos de fatura, o teto real do varejo brasileiro. O mesmo numero esta no CHECK da
-// migration 0008, e os dois tem que concordar.
-const MAX_PARCELAS = 24;
+// migration 0008 e na mensagem de erro do handle.js.
+export const MAX_PARCELAS = 24;
 
 // '1.234,56' (ponto de milhar) e '1.50' (ponto decimal) chegam os dois aqui. A virgula desempata:
 function toCents(s) {
@@ -69,7 +69,7 @@ export function centavos(txt) {
 
 // 'ontem' e 'anteontem', aplicados sobre a data ja normalizada. Monta por componente e deixa o
 // Date.UTC virar o mes e o ano sozinho (dia 0 de marco = ultimo dia de fevereiro).
-function shiftDia(iso, n) {
+export function shiftDia(iso, n) {
 	const [a, m, d] = iso.split('-').map(Number);
 	return new Date(Date.UTC(a, m - 1, d + n)).toISOString().slice(0, 10);
 }
@@ -192,9 +192,9 @@ export function parse(msg, { rules, hoje }) {
 	if (cents <= 0) return { ok: false, reason: 'sem_valor' };
 	if (dataRuim) return { ok: false, reason: 'data_invalida' };
 	if (datas > 1) return { ok: false, reason: 'data_ambigua' };
-	// Metodo por ultimo porque e o campo menos danoso de errar: valor errado mente sobre quanto, data
-	// errada mente sobre o mes, metodo errado mexe so na divisao entre 'sai da conta agora' e 'vai pra
-	// fatura'.
+	// Metodo depois de valor e data porque e o campo menos danoso de errar: valor errado mente sobre
+	// quanto, data errada mente sobre o mes, metodo errado mexe so na divisao entre 'sai da conta
+	// agora' e 'vai pra fatura'.
 	if (metodos > 1) return { ok: false, reason: 'metodo_ambiguo' };
 	// As parcelas entram depois de valor e data, e nao no meio: sem valor a mensagem nao e um gasto,
 	// sem parcela ela e.

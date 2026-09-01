@@ -1,9 +1,9 @@
-import { parse, centavos, norm, LABEL, isMetodo, rotulo } from './parser.js';
+import { parse, centavos, norm, isMetodo, rotulo, shiftDia, MAX_PARCELAS } from './parser.js';
 import { brl, dia, bloco } from './fmt.js';
 import { relatorio, resolveMes } from './report.js';
 import { estadoDaCategoria, tabelaOrcamentos, avisoEstouro, linhasDoOrcamento, nomeDoMes } from './orcamento.js';
-import { corpo, resumo, teclado, emLinhas, ACAO, ACOES } from './vista.js';
-import { parcelasDe, linhaParcelas, somaMes, mesFatura, janelaFatura } from './fatura.js';
+import { corpo, teclado, ACAO, ACOES } from './vista.js';
+import { parcelasDe, linhaParcelas, dividir, somaMes, mesFatura, janelaFatura } from './fatura.js';
 import {
 	lerFixo,
 	salvarFixa,
@@ -26,12 +26,14 @@ import {
 	campoValido,
 	validarCampo,
 	aplicarEdicao,
+	recusaParcelada,
 	CAMPOS_LISTA,
 } from './consulta.js';
 
 const API = (t) => `https://api.telegram.org/bot${t}`;
 
-// Todo contato com o Telegram passa por aqui. Falha de API nao lanca, so loga:
+// Falha de API nao lanca, so loga: handle() roda dentro do ctx.waitUntil, e abortar no
+// meio deixaria a transacao ja gravada sem resposta nenhuma no chat.
 export async function tg(env, method, body) {
 	const r = await fetch(`${API(env.TELEGRAM_TOKEN)}/${method}`, {
 		method: 'POST',
@@ -42,8 +44,9 @@ export async function tg(env, method, body) {
 	return r;
 }
 
-// O Worker roda em UTC, o usuario vive em Sao Paulo. Sem esta conversao todo gasto lancado depois
-// das 21h locais cairia no dia seguinte.
+// O Worker roda em UTC e o usuario vive em Sao Paulo: sem isto, gasto lancado depois das
+// 21h locais cai no dia seguinte. 'en-CA' e o atalho pro formato 'YYYY-MM-DD'. Formatador
+// no topo do modulo, senao construir um Intl.DateTimeFormat por mensagem domina a CPU.
 const FORMATO_DIA_SP = new Intl.DateTimeFormat('en-CA', {
 	timeZone: 'America/Sao_Paulo',
 	year: 'numeric',
@@ -51,9 +54,7 @@ const FORMATO_DIA_SP = new Intl.DateTimeFormat('en-CA', {
 	day: '2-digit',
 });
 
-// Exportada porque o cron das contas fixas precisa do mesmo 'hoje' que uma mensagem usaria.
-/* Grava o valor de uma conta variavel, seja pela resposta a pergunta ou pelo '/fixo pagar'. Reserva
-   o mes se ainda nao estiver reservado. */
+// Reserva o mes se ainda nao estiver reservado: o '/fixo pagar' pode chegar antes do dia.
 async function pagarFixa(env, chatId, bill, ym, valor, hoje) {
 	await reservarMes(env, bill.id, ym, 'lancado');
 	const catId = bill.category_id ?? (await categoriaPorRegra(env, bill.name));
@@ -78,10 +79,9 @@ async function pagarFixa(env, chatId, bill, ym, valor, hoje) {
 	if (aviso) await tg(env, 'sendMessage', { chat_id: chatId, text: aviso });
 }
 
+// O cron das contas fixas precisa do mesmo hoje que uma mensagem usaria.
 export const hojeSP = () => FORMATO_DIA_SP.format(new Date());
 
-// Cada recusa do parser vira uma frase que repete o formato certo: a mensagem de erro e a unica
-// documentacao que o usuario le.
 const AJUDA_EDITAR = '\nExemplo: /editar 137 valor 89,90';
 
 const ERRO = {
@@ -90,20 +90,20 @@ const ERRO = {
 	data_invalida: 'Data inválida. Use dd/mm, ou dd/mm/aaaa no ano corrente: 12/08.',
 	data_ambigua: 'Achei mais de uma data. Manda só uma: 120 mercado 12/08',
 	metodo_ambiguo: 'Achei mais de uma forma de pagamento. Manda só uma: 120 mercado credito',
-	parcelas_invalidas: 'Parcelas de 1 a 24. Formato: 300 sofá 3x credito',
+	parcelas_invalidas: `Parcelas de 1 a ${MAX_PARCELAS}. Formato: 300 sofá 3x credito`,
 	parcelas_ambiguas: 'Achei mais de um parcelamento. Manda só um: 300 sofá 3x credito',
 	parcelas_sem_credito: 'Parcelado só no crédito. Tira o método, ou usa credito: 300 sofá 3x',
 };
 
-// Carrega a tabela de regras inteira a cada mensagem. Sao poucas dezenas de linhas, e o parser
-// precisa consultar token a token:
+// A tabela inteira a cada mensagem: sao poucas dezenas de linhas, e o parser consulta
+// token a token.
 async function loadRules(env) {
 	const { results } = await env.DB.prepare('select keyword, category_id, hits from category_rules').all();
 	return new Map(results.map((r) => [r.keyword, r]));
 }
 
-// Todas as categorias viram botao, ordenadas por uso. O left join e o que faz categoria
-// recem-criada (uso = 0) tambem aparecer.
+// Todas viram botao, ordenadas por uso. left join pra categoria recem-criada (uso 0)
+// tambem aparecer: com inner join ela nunca seria clicavel e nenhuma regra nasceria.
 async function categoriasPorUso(env) {
 	const { results } = await env.DB.prepare(
 		`
@@ -117,23 +117,24 @@ async function categoriasPorUso(env) {
 	return results;
 }
 
-/* As duas unicas funcoes que tocam a chave de categoria, e a razao de existirem: a migration 0004
-   fez de name_norm a chave real, mas nenhum CHECK pode garantir que ela esteja normalizada. */
+// As duas unicas funcoes que tocam a chave de categoria. A 0004 fez de name_norm a chave
+// real e nenhum CHECK pode garantir que ela esteja normalizada, entao a invariante vive
+// aqui. O slice(0, 40) vem antes do norm(), senao name e name_norm descrevem nomes diferentes.
 async function criarCategoria(env, nome) {
 	const limpo = nome.replace(/\s+/g, ' ').trim().slice(0, 40);
-	// 'or ignore' e nao 'on conflict(...) do nothing': existem dois indices unicos aqui (name, da
-	// 0001, e name_norm, da 0004).
+	// 'or ignore' e nao conflict target: sao dois indices unicos (name da 0001, name_norm da
+	// 0004) e o alvo unico deixaria a colisao pelo outro virar excecao dentro do waitUntil.
 	await env.DB.prepare('insert or ignore into categories (name, name_norm) values (?, ?)').bind(limpo, norm(limpo)).run();
 }
 
 const acharCategoria = (env, nome) => env.DB.prepare('select id, name from categories where name_norm = ?').bind(norm(nome)).first();
 
-// Palavra = so letras e digitos, com pelo menos uma letra. Barra exatamente o que o parser ja
-// consumiu ou o que nunca casaria de volta como keyword:
+// So letras e digitos, com pelo menos uma letra. Barra '12/08/2026', '-20', '1.234',
+// '__proto__'.
 const ePalavra = (w) => /^[a-z0-9]+$/.test(w) && /[a-z]/.test(w);
 
-/* Escolhe, dentro da descricao, a palavra que vira regra de categoria. A mais longa e heuristica
-   barata pra nao aprender ruido curto ('do', 'no'). */
+// A palavra mais longa da descricao, pra nao aprender ruido curto. Recusa alias de metodo:
+// "10 pix cred" deixaria 'cred' na descricao e dali em diante "50 cred" seria categoria.
 function keywordDe(desc) {
 	return (desc ?? '')
 		.split(/\s+/)
@@ -141,14 +142,16 @@ function keywordDe(desc) {
 		.sort((a, b) => b.length - a.length)[0];
 }
 
-/* O dia de fechamento do cartao. Uma linha na tabela config, com default 28. */
+// Derivado na leitura e nunca gravado junto do lancamento: o usuario pode mudar o
+// fechamento, e um mes de fatura gravado na linha passaria a discordar da configuracao.
 async function fechamentoDaFatura(env) {
 	const r = await env.DB.prepare('select invoice_closing_day as dia from config where id = 1').first();
 	return r?.dia ?? 28;
 }
 
-/* Grava as N linhas de uma compra parcelada, e devolve a primeira. DB.batch e nao um insert de N
-   linhas: */
+// batch e nao um insert de N linhas: o D1 tem teto de parametros por consulta, e batch e
+// transacao, entao ou entram as tres parcelas ou nenhuma. installment_group e o update_id;
+// tg_update_id vai so na primeira parcela, pq ele e UNIQUE.
 async function inserirParceladas(env, p, texto, updateId) {
 	const fechamento = await fechamentoDaFatura(env);
 	const linhas = parcelasDe({ amount_cents: p.amount_cents, occurred_on: p.occurred_on, parcelas: p.parcelas, fechamento });
@@ -184,11 +187,11 @@ async function inserirParceladas(env, p, texto, updateId) {
 }
 
 async function onMessage(msg, env, updateId) {
-	// caption entra junto com text.
+	// caption entra junto com text: foto legendada e um lancamento como outro qualquer.
 	const texto = (msg.text ?? msg.caption ?? '').trim();
 
-	// O 'return' mudo que morava aqui era, do lado do usuario, indistinguivel de bot fora do ar:
-	// mandava foto do comprovante, audio, documento, e nada acontecia.
+	// A imagem nao fica guardada em lugar nenhum (nao ha R2 aqui): o que vira lancamento e a
+	// legenda. Sem resposta, mandar foto ou audio era indistinguivel de bot fora do ar.
 	if (!texto) {
 		await tg(env, 'sendMessage', {
 			chat_id: msg.chat.id,
@@ -197,12 +200,10 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// Uma so leitura do relogio por mensagem: se o parser pedisse a data de novo pra cada token, uma
-	// mensagem na virada da meia-noite poderia usar dois dias diferentes.
+	// Uma leitura do relogio por mensagem: na virada da meia-noite duas dariam dias diferentes.
 	const hoje = hojeSP();
 
-	// A barra e opcional em todos os comandos: no celular e mais rapido digitar 'relatorio' do que
-	// achar a barra no teclado.
+	// A barra e opcional em todo comando: no celular e mais rapido digitar sem ela.
 	if (/^\/?relat[oó]rio/i.test(texto)) {
 		await tg(env, 'sendMessage', {
 			chat_id: msg.chat.id,
@@ -212,13 +213,12 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// /categoria existe porque o banco nasce vazio.
+	// O banco nasce vazio, entao sem /categoria o primeiro botao de categoria nunca apareceria
+	// e o parser ficaria preso em confidence 0.4.
 	const mCat = texto.match(/^\/?categorias?(?:\s+(.+))?$/i);
 	if (mCat) {
 		const nome = mCat[1]?.trim();
 		if (nome) {
-			// 'do nothing' e nao 'do update': repetir /categoria mercado e o jeito natural de perguntar se
-			// ela ja existe, e nao pode dar erro.
 			await criarCategoria(env, nome);
 		}
 		const { results } = await env.DB.prepare('select name from categories order by name').all();
@@ -231,14 +231,16 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// /orcamento define o teto mensal de uma categoria (categories.budget_cents). /orcamento lista os
-	// tetos /orcamento mercado 800 define /orcamento mercado 0 remove
+	//   /orcamento              lista gasto contra teto
+	//   /orcamento mercado 800  define
+	//   /orcamento mercado 0    remove
 	const mOrc = texto.match(/^\/?or[cç]amentos?(?:\s+(.+))?$/i);
 	if (mOrc) {
 		const arg = mOrc[1]?.trim();
 
-		// Sem argumento, ou com um argumento que e mes ('anterior', 'passado', '7'): tabela de gasto
-		// contra teto.
+		// Sem argumento, ou com um argumento que e mes: tabela. O mes sai do mesmo resolveMes do
+		// /relatorio. Ambiguidade aceita: categoria chamada 'anterior' ou '07' fica inalcancavel
+		// pela forma de um token so.
 		const soMes = !arg || /^(anterior|passado|0?[1-9]|1[0-2])$/i.test(arg);
 		if (soMes) {
 			const ym = resolveMes(arg ?? '', hoje);
@@ -251,8 +253,8 @@ async function onMessage(msg, env, updateId) {
 			return;
 		}
 
-		// O valor e sempre o ultimo token, e o nome e todo o resto: assim '/orcamento mercado do bairro
-		// 800' funciona sem exigir aspas.
+		// O valor e sempre o ultimo token e o nome e o resto, entao '/orcamento mercado do bairro
+		// 800' funciona sem aspas.
 		const partes = arg.split(/\s+/);
 		const valor = partes.length > 1 ? centavos(partes.at(-1)) : null;
 		if (valor === null) {
@@ -263,21 +265,20 @@ async function onMessage(msg, env, updateId) {
 			return;
 		}
 
-		// Busca por name_norm e nao 'collate nocase': o nocase do SQLite dobra so ASCII, entao com ele
-		// '/orcamento saude' nao acharia 'Saúde'.
+		// Busca por name_norm e nao collate nocase: o NOCASE dobra so ASCII e '/orcamento saude'
+		// nao acharia 'Saúde'. O nome ecoado e o do cadastro, pra ficar claro qual foi atingida.
 		const nome = partes.slice(0, -1).join(' ');
 		const cat = await acharCategoria(env, nome);
 
 		if (!cat) {
 			await tg(env, 'sendMessage', {
 				chat_id: msg.chat.id,
-				text: `Nao achei a categoria "${nome}". Crie com: /categoria ${nome}`,
+				text: `Não achei a categoria "${nome}". Crie com: /categoria ${nome}`,
 			});
 			return;
 		}
 
-		// 0 grava NULL, nao zero: 'sem teto definido' e 'teto de R$ 0,00' sao coisas diferentes, e e o
-		// NULL que a listagem le como 'sem orçamento'.
+		// 0 grava NULL: 'sem teto' e 'teto de R$ 0,00' sao estados diferentes.
 		await env.DB.prepare('update categories set budget_cents = ? where id = ?')
 			.bind(valor || null, cat.id)
 			.run();
@@ -289,7 +290,7 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// /extrato [mes].
+	// E o id mostrado aqui que torna o /editar usavel.
 	const mExt = texto.match(/^[/]?extrato(?:[ ]+(.+))?$/i);
 	if (mExt) {
 		const ym = resolveMes(mExt[1] ?? '', hoje);
@@ -298,7 +299,6 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// /revisar.
 	if (/^[/]?revisar$/i.test(texto)) {
 		const { fila, total } = await paraRevisar(env);
 		if (!total) {
@@ -314,7 +314,6 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// /buscar <termo>.
 	const mBusca = texto.match(/^[/]?busca[r]?[ ]+(.+)$/i);
 	if (mBusca) {
 		const termo = mBusca[1].trim();
@@ -323,7 +322,8 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// /editar <id> [campo] [valor].
+	// Comando com id e nao resposta a mensagem: botao de mensagem com mais de 48h morre
+	// (editMessageText falha), e comando com id funciona pra sempre.
 	const mEd = texto.match(/^[/]?editar[ ]+(\d+)(?:[ ]+([^ ]+)(?:[ ]+(.+))?)?$/i);
 	if (mEd) {
 		const id = Number(mEd[1]);
@@ -333,7 +333,6 @@ async function onMessage(msg, env, updateId) {
 			return;
 		}
 
-		// Sem campo: mostra o lancamento com os botoes.
 		if (!mEd[2]) {
 			const cats = tx.category_id ? [] : await categoriasPorUso(env);
 			const d = await detalhe(env, tx, cats);
@@ -341,12 +340,22 @@ async function onMessage(msg, env, updateId) {
 			return;
 		}
 
+		// Duas recusas e nao uma: '/editar 137 valor' e campo certo com valor faltando, e responder
+		// 'Campo inválido' dizia o oposto do que aconteceu.
 		const campo = campoValido(mEd[2]);
-		if (!campo || !mEd[3]) {
-			await tg(env, 'sendMessage', {
-				chat_id: msg.chat.id,
-				text: `Campo inválido. Use: ${CAMPOS_LISTA}.` + AJUDA_EDITAR,
-			});
+		if (!campo) {
+			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: `Campo inválido. Use: ${CAMPOS_LISTA}.` + AJUDA_EDITAR });
+			return;
+		}
+		if (!mEd[3]) {
+			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: `Falta o valor novo do campo ${campo}.` + AJUDA_EDITAR });
+			return;
+		}
+
+		// Depois do campo resolvido, senao '/editar 139 xpto foo' responde sobre parcelamento.
+		const recusa = recusaParcelada(tx, campo);
+		if (recusa) {
+			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: recusa });
 			return;
 		}
 
@@ -362,11 +371,10 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// /fatura.
 	const mFat = texto.match(/^[/]?fatura(?:[ ]+(.+))?$/i);
 	if (mFat) {
 		const arg = mFat[1]?.trim();
-		const mFech = arg?.match(/^fechamento[ ]+(""" + BS + """d{1,2})$/i);
+		const mFech = arg?.match(/^fechamento[ ]+(\d+)$/i);
 		if (mFech) {
 			const d = +mFech[1];
 			if (d < 1 || d > 28) {
@@ -385,8 +393,8 @@ async function onMessage(msg, env, updateId) {
 		const ym = arg ? resolveMes(arg, hoje) : mesFatura(hoje, fechamento);
 		const { ini, fim } = janelaFatura(ym, fechamento);
 
-		// Janela por between de texto, nao por prefixo de mes: e a diferenca entre a fatura e o mes do
-		// calendario, e de quebra usa o idx_tx_data melhor que o LIKE.
+		// Janela por between de texto e nao por prefixo de mes: e a diferenca entre a fatura e o
+		// mes do calendario, e usa o idx_tx_data melhor que o LIKE.
 		const [cats, abertas] = await env.DB.batch([
 			env.DB.prepare(
 				`select coalesce(c.name, 'Sem categoria') as nome, sum(t.amount_cents) as v
@@ -405,7 +413,9 @@ async function onMessage(msg, env, updateId) {
 		const linhas = cats.results;
 		const total = linhas.reduce((sm, c) => sm + c.v, 0);
 		const larg = Math.max(12, ...linhas.map((c) => c.nome.length));
-		const out = [`Fatura de ${nomeDoMes(ym)} · fecha ${dia(fim)}`, `compras de ${dia(ini)} a ${dia(fim)}`, ''];
+		// shiftDia(ini, 1) e nao dia(ini): o 'ini' de janelaFatura e exclusivo, entao imprimir o
+		// proprio ini anunciaria como primeiro dia da janela um dia que a fatura nao cobre.
+		const out = [`Fatura de ${nomeDoMes(ym)} · fecha ${dia(fim)}`, `compras de ${dia(shiftDia(ini, 1))} a ${dia(fim)}`, ''];
 
 		if (!linhas.length) out.push('Nada no crédito nesta fatura.');
 		else {
@@ -415,8 +425,6 @@ async function onMessage(msg, env, updateId) {
 			out.push('', `${'Total'.padEnd(larg)}  ${brl(total).padStart(10)}`);
 		}
 
-		// As parcelas em aberto por nome, porque "por que outubro ja esta em R$ 420" e a pergunta que
-		// este bloco existe pra responder.
 		if (abertas.results.length) {
 			out.push('', 'Parcelas nesta fatura');
 			for (const a of abertas.results) {
@@ -446,7 +454,6 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// /fixo.
 	const mFixo = texto.match(/^[/]?fixo(?:[ ]+(.+))?$/i);
 	if (mFixo) {
 		const arg = mFixo[1]?.trim();
@@ -461,26 +468,25 @@ async function onMessage(msg, env, updateId) {
 			return;
 		}
 
-		// Os verbos vem primeiro, senao '/fixo pausar netflix' cadastraria uma conta chamada 'pausar
-		// netflix'. Limite aceito:
+		// Os verbos vem primeiro, senao '/fixo pausar netflix' cadastraria uma conta com esse nome.
 		const mVerbo = arg.match(/^(pagar|pular|pausar|voltar|remover)[ ]+(.+)$/i);
 		if (mVerbo) {
 			const verbo = norm(mVerbo[1]);
 			const resto = mVerbo[2].trim();
 
-			// '/fixo pagar luz 183,40' precisa de verbo proprio porque '/fixo luz 10' e ao mesmo tempo "dia
-			// 10" e "R$ 10,00".
 			if (verbo === 'pagar') {
+				// A forma e conferida antes do banco: com a busca primeiro, '/fixo pagar luz' sem o valor
+				// respondia 'Não achei a conta fixa "luz"' sobre uma conta que existe.
 				const partes = resto.split(/[ ]+/);
-				const valor = centavos(partes.at(-1));
-				const nome = partes.slice(0, -1).join(' ');
-				const bill = nome && (await acharFixa(env, nome));
-				if (!bill) {
-					await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: `Não achei a conta fixa "${nome || resto}".` });
-					return;
-				}
+				const valor = partes.length > 1 ? centavos(partes.at(-1)) : null;
 				if (valor === null || valor <= 0) {
 					await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: 'Formato: /fixo pagar luz 183,40' });
+					return;
+				}
+				const nome = partes.slice(0, -1).join(' ');
+				const bill = await acharFixa(env, nome);
+				if (!bill) {
+					await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: `Não achei a conta fixa "${nome}".` });
 					return;
 				}
 				await pagarFixa(env, msg.chat.id, bill, ym, valor, hoje);
@@ -519,24 +525,25 @@ async function onMessage(msg, env, updateId) {
 			return;
 		}
 
-		// Cadastro.
-		const { nome, dia, valor, metodo } = lerFixo(arg);
+		// 'dia: diaVenc' e nao 'dia': o nome cru sombrearia o dia() do fmt.js dentro de todo este
+		// bloco, e formatar uma data aqui morreria em ReferenceError de TDZ.
+		const { nome, dia: diaVenc, valor, metodo } = lerFixo(arg);
 		if (!nome) {
 			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: 'Falta o nome. Formato: /fixo aluguel 5 1850 pix' });
 			return;
 		}
-		if (dia === null) {
+		if (diaVenc === null) {
 			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: 'Falta o dia. Formato: /fixo aluguel 5 1850 pix' });
 			return;
 		}
-		if (dia < 1 || dia > 31) {
+		if (diaVenc < 1 || diaVenc > 31) {
 			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: 'Dia inválido. Use um dia de 1 a 31: /fixo aluguel 5 1850 pix' });
 			return;
 		}
 
 		const antes = await acharFixa(env, nome);
 		const catId = antes?.category_id ?? (await categoriaPorRegra(env, nome));
-		const bill = await salvarFixa(env, { nome, dia, valor, metodo, categoryId: catId });
+		const bill = await salvarFixa(env, { nome, dia: diaVenc, valor, metodo, categoryId: catId });
 
 		const linhas = [
 			`Fixa ${antes ? 'atualizada' : 'criada'}: ${bill.name} · dia ${bill.due_day} · ${
@@ -546,10 +553,10 @@ async function onMessage(msg, env, updateId) {
 		if (bill.kind === 'variavel') linhas.push(`Todo dia ${bill.due_day} eu pergunto quanto foi.`);
 		else linhas.push(`Lanço sozinho todo dia ${bill.due_day}. Não quer? /fixo pausar ${bill.name}`);
 
-		// Dia que ja passou neste mes: marca o mes como pulado pra o cron diario nao revisitar, e diz
-		// isso.
-		if (dia <= +hoje.slice(8, 10)) {
-			await pularMes(env, bill.id, ym);
+		// reservarMes (do nothing) e nao pularMes: re-cadastrar e o jeito de corrigir o valor, e
+		// nao pode sobrescrever um mes ja 'perguntado' ou 'lancado'. A frase so sai quando a
+		// reserva foi ganha.
+		if (diaVenc <= +hoje.slice(8, 10) && (await reservarMes(env, bill.id, ym, 'pulado'))) {
 			linhas.push(`O dia ${bill.due_day} já passou neste mês, então começo no mês que vem.`);
 		}
 
@@ -557,8 +564,6 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// Qualquer outra coisa comecando com barra cai na ajuda, inclusive o /start que o Telegram manda
-	// sozinho no primeiro contato.
 	if (texto.startsWith('/')) {
 		await tg(env, 'sendMessage', {
 			chat_id: msg.chat.id,
@@ -596,14 +601,15 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// Resposta a um pedido de valor de conta variavel. Precisa vir antes do parse:
+	// Resposta a um pedido de valor de conta variavel, antes do parse: '183,40' sozinho tambem
+	// e um lancamento valido. Depois dos comandos, pra /relatorio continuar sendo /relatorio. A
+	// classificacao e por forma: so desvia se centavos() aceitar o texto inteiro.
 	const respondido = msg.reply_to_message?.message_id;
 	if (respondido && centavos(texto) !== null) {
 		const pend = await pendentePorMensagem(env, respondido);
 		if (pend) {
 			const bill = await acharFixa(env, pend.name);
-			// O mes e o da pergunta e nao o de hoje: resposta que chega em outubro pra a pergunta de
-			// setembro lanca em setembro, onde a conta de fato venceu.
+			// O mes e o da pergunta e nao o de hoje: resposta que chega em outubro lanca em setembro.
 			if (bill) return pagarFixa(env, msg.chat.id, bill, pend.due_month, centavos(texto), hoje);
 		}
 	}
@@ -618,8 +624,9 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// Parcelado ou nao, o insert e idempotente. Sem parcela, pelo UNIQUE de tg_update_id; com parcela,
-	// pelo indice unico (installment_group, installment_no).
+	// 'on conflict do nothing' sem alvo: a primeira linha pode conflitar por tg_update_id ou
+	// pelo indice (installment_group, installment_no), e alvo unico deixa o outro conflito
+	// abortar o batch. 'or ignore' nao serve, engole CHECK e NOT NULL.
 	const row = p.parcelas
 		? await inserirParceladas(env, p, texto, updateId)
 		: await env.DB.prepare(
@@ -635,19 +642,16 @@ async function onMessage(msg, env, updateId) {
 				.bind(p.amount_cents, p.occurred_on, p.category_id, p.method, p.description, texto, p.parser, p.confidence, updateId)
 				.first();
 
-	// Sem linha = o update ja tinha sido processado. Sair calado e o certo:
+	// Sem linha, o update ja tinha sido processado. A resposta da primeira vez segue no chat.
 	if (!row) return;
 
-	// Uma consulta no lugar da busca de nome que morava aqui: ela ja devolve o teto e o gasto do mes
-	// junto, entao a linha de orcamento na confirmacao e o aviso de estouro saem sem nenhum round trip
-	// a mais no caminho quente.
+	// Ja devolve teto e gasto do mes, entao a linha de orcamento e o aviso de estouro nao
+	// custam round trip nenhum no caminho quente.
 	const estado = await estadoDaCategoria(env, p.category_id, p.occurred_on.slice(0, 7));
 
 	// So busca as categorias se ainda faltar uma.
 	const cats = p.category_id ? [] : await categoriasPorUso(env);
 
-	// O valor da primeira linha continua sendo o TOTAL digitado, que e o que o usuario acabou de
-	// mandar.
 	const linhaParc = p.parcelas ? linhaParcelas(p.amount_cents, p.parcelas, mesFatura(p.occurred_on, await fechamentoDaFatura(env))) : null;
 
 	await tg(env, 'sendMessage', {
@@ -657,31 +661,33 @@ async function onMessage(msg, env, updateId) {
 		reply_markup: { inline_keyboard: teclado(row.id, p.category_id, p.parcelas ? 'credito' : p.method, cats) },
 	});
 
-	// O aviso de estouro vai em mensagem separada.
-	const aviso = avisoEstouro(estado, p.amount_cents, p.occurred_on.slice(0, 7), hoje);
+	// Numa compra parcelada o delta e a parcela 1 e nao o total: so ela entrou neste mes. Com
+	// o total, o 'antes' de cruzou() recua demais e uma categoria ja estourada avisa de novo.
+	const delta = p.parcelas ? dividir(p.amount_cents, p.parcelas)[0] : p.amount_cents;
+	const aviso = avisoEstouro(estado, delta, p.occurred_on.slice(0, 7), hoje);
 	if (aviso) await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: aviso });
 }
 
-// Clique de botao volta como callback_query trazendo de volta o callback_data que teclado() montou:
+// Clique de botao volta como callback_query com o callback_data que teclado() montou:
 // '<acao>:<txId>:<valor>'.
 async function onCallback(cb, env) {
 	// O Telegram deixa o botao com a ampulheta girando ate receber este ack.
 	const ack = (t) => tg(env, 'answerCallbackQuery', { callback_query_id: cb.id, text: t });
 
-	// callback_data volta do Telegram como texto solto, e nada garante que saiu do teclado() deste
-	// arquivo. Um 'foo:42:x' passava pela busca da transacao, nao casava com ramo nenhum, e ainda
-	// assim caia no ack('ok') + editMessageText do fim:
+	// callback_data volta como texto solto, e nada garante que saiu do teclado() deste arquivo.
+	// Exatamente tres partes, pq 'del' manda a terceira vazia. cb.data pode nem existir, e ai o
+	// split lancaria dentro do waitUntil, com o botao girando pra sempre.
 	const partes = (cb.data ?? '').split(':');
 	if (partes.length !== 3) return ack('acao invalida');
 
-	// Paginacao do extrato, tratada antes de tudo: ela nao fala de transacao nenhuma, entao o segundo
-	// campo e o mes e nao um id.
+	// Paginacao do extrato antes de tudo: o segundo campo aqui e o mes e nao um id.
 	if (partes[0] === ACAO.EXT) {
 		const [, ym, pag] = partes;
 		if (!/^\d{4}-\d{2}$/.test(ym)) return ack('acao invalida');
 		const pagina = Math.max(0, Number(pag) || 0);
 		const { texto, paginas } = await extrato(env, ym, pagina);
 		await ack('ok');
+		// Troca o texto pra mensagem antiga nao continuar parecendo um gasto vivo.
 		return tg(env, 'editMessageText', {
 			chat_id: cb.message.chat.id,
 			message_id: cb.message.message_id,
@@ -696,10 +702,11 @@ async function onCallback(cb, env) {
 	const [acao, , valor] = partes;
 
 	const tx = await env.DB.prepare('select * from transactions where id = ?').bind(txId).first();
-	// Some quando o usuario clica num botao de mensagem antiga cuja transacao ja foi apagada.
+	// Clique num botao de mensagem antiga cuja transacao ja foi apagada.
 	if (!tx) return ack('sumiu');
 
-	// O alvo de toda operacao: a linha, ou o grupo inteiro se a compra for parcelada.
+	// O alvo de toda operacao: a linha, ou o grupo inteiro se a compra for parcelada. Uma
+	// categoria por parcela espalharia a mesma compra por tres categorias no relatorio.
 	const grupo = tx.installment_group;
 	const alvoSql = grupo === null ? 'id = ?' : 'installment_group = ?';
 	const alvoVal = grupo === null ? txId : grupo;
@@ -715,30 +722,29 @@ async function onCallback(cb, env) {
 		});
 	}
 
-	// Os dois ramos abaixo atualizam o banco e tambem o objeto tx em memoria, porque o resumo e o
-	// teclado logo adiante sao montados a partir dele.
+	// Os dois ramos atualizam o banco e tambem o tx em memoria: o resumo e o teclado saem dele.
 	if (acao === ACAO.PAY) {
-		// callback_data volta do Telegram como texto solto: nada garante que e uma das strings que
-		// teclado() montou.
+		// Sem esta linha um 'pay:42:banana' forjado bate no CHECK da 0002, e a excecao do D1 morre
+		// no catch do waitUntil com o botao girando.
 		if (!rotulo(valor)) return ack('metodo invalido');
-		// Parcelado e credito por definicao.
 		if (grupo !== null) return ack('parcelado e sempre no credito');
 		await env.DB.prepare('update transactions set method = ? where id = ?').bind(valor, txId).run();
 		tx.method = valor;
 	}
 
-	// Resolvida uma vez so: no ramo abaixo ela serve de validacao do callback_data.
 	let cat = null;
-	// Se este clique realmente moveu a transacao de categoria. Sai do meta.changes do UPDATE
-	// condicional, entao re-clique na mesma categoria nao conta.
+	// Sai do meta.changes do UPDATE condicional, entao re-clique na mesma categoria nao conta.
 	let mudouCategoria = false;
 
 	if (acao === ACAO.CAT) {
-		// Mesma desconfianca do 'pay': o id da categoria vem do callback_data e pode ser forjado.
+		// O id da categoria vem do callback_data e pode ser forjado. Sem esta consulta o update
+		// bate na foreign key e a excecao morre no catch do waitUntil.
 		cat = await env.DB.prepare('select id, name from categories where id = ?').bind(valor).first();
 		if (!cat) return ack('categoria invalida');
 
-		// parser vira 'manual' e confidence 1: foi o usuario quem disse, nao o regex.
+		// parser vira 'manual' e confidence 1: foi o usuario quem disse. O
+		// 'and (category_id is null or category_id <> ?)' torna o clique idempotente, senao dois
+		// toques inflam hits, que e o desempate entre regras que casam na mesma mensagem.
 		const upd = await env.DB.prepare(
 			`update transactions set category_id = ?, parser = ?, confidence = 1
         where ${alvoSql} and (category_id is null or category_id <> ?)`,
@@ -746,11 +752,11 @@ async function onCallback(cb, env) {
 			.bind(cat.id, 'manual', alvoVal, cat.id)
 			.run();
 
-		// cat.id e nao 'valor': valor e a string crua do callback_data, e daqui ela ia direto pro objeto
-		// tx e dali pro teclado.
+		// cat.id e nao 'valor': valor e a string crua do callback_data, e comparar '1' com 1 falha.
 		tx.category_id = cat.id;
 
-		// Aprende com a correcao: precisar clicar no botao significa que o parser errou.
+		// Precisar clicar no botao significa que o parser errou, entao a palavra da descricao vira
+		// regra. So aprende se o UPDATE mudou algo: changes = 0 e clique que nao corrigiu nada.
 		mudouCategoria = upd.meta.changes > 0;
 
 		if (mudouCategoria) {
@@ -769,8 +775,6 @@ async function onCallback(cb, env) {
 		}
 	}
 
-	// A mesma consulta do lancamento, e ela substitui a busca de nome que morava aqui: traz nome, teto
-	// e gasto do mes de uma vez.
 	const ym = tx.occurred_on.slice(0, 7);
 	const estado = await estadoDaCategoria(env, tx.category_id, ym);
 
@@ -784,31 +788,30 @@ async function onCallback(cb, env) {
 		reply_markup: { inline_keyboard: teclado(txId, tx.category_id, tx.method, cats) },
 	});
 
-	// Mover um gasto para uma categoria conta como o valor dele entrando naquele mes: se esse for o
-	// lancamento que cruza o teto de la, o aviso sai igual ao do lancamento direto.
+	// Mover um gasto para uma categoria conta como o valor dele entrando naquele mes.
 	const aviso = mudouCategoria ? avisoEstouro(estado, tx.amount_cents, ym, hojeSP()) : null;
 	if (aviso) await tg(env, 'sendMessage', { chat_id: cb.message.chat.id, text: aviso });
 }
 
-// Todo update que o bot trata carrega o chat em um destes lugares. Lista explicita e nao busca
-// recursiva:
+// Lista explicita e nao busca recursiva: aceitar um tipo novo de update vira decisao.
+// edited_message esta aqui sem o bot tratar edicao, so pra ela aparecer no log.
 export const chatDe = (upd) => upd.message?.chat?.id ?? upd.edited_message?.chat?.id ?? upd.callback_query?.message?.chat?.id;
 
 export async function handle(upd, env) {
-	// O try engloba tudo porque index.js JA respondeu 200 antes de chamar aqui (index.js:27-33): o
-	// Telegram da o update por entregue e nunca reenvia.
+	// index.js ja respondeu 200 antes de chamar aqui, e o Telegram nunca reenvia um update
+	// entregue. Sem este catch o gasto se perde deixando so um console.error.
 	try {
-		// Os await nao sao decoracao. Com 'return onCallback(...)' a promise sai do frame do try e a
-		// rejeicao dela passaria longe deste catch.
+		// Os await nao sao decoracao: com 'return onCallback(...)' a promise sai do frame do try e
+		// a rejeicao passaria longe deste catch.
 		if (upd.callback_query) return await onCallback(upd.callback_query, env);
-		// O update_id vai como parametro e nao grudado no objeto.
+		// O update_id vai como parametro e nao grudado no objeto que vem de fora. E ele que torna
+		// o insert idempotente, via tg_update_id.
 		if (upd.message) return await onMessage(upd.message, env, upd.update_id);
-		// Qualquer outro tipo de update (edicao de mensagem, entrada em grupo, enquete) e ignorado.
 		console.log('update ignorado:', Object.keys(upd).join(','));
 	} catch (e) {
 		console.error('handle falhou', e);
 		const chatId = chatDe(upd);
-		// tg() nao lanca em resposta 4xx (so loga), mas lanca em falha de rede.
+		// tg() nao lanca em 4xx, so em falha de rede, e uma excecao aqui derrubaria o proprio aviso.
 		if (chatId) {
 			await tg(env, 'sendMessage', {
 				chat_id: chatId,

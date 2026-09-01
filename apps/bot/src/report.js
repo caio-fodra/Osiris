@@ -1,13 +1,9 @@
 import { rotulo } from './parser.js';
 import { brl, bloco } from './fmt.js';
-import { celulaTeto } from './orcamento.js';
+import { celulaTeto, nomeDoMes } from './orcamento.js';
 
-const MES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
-
-const nomeMes = (ym) => `${MES[+ym.slice(5, 7) - 1]}/${ym.slice(0, 4)}`;
-
-// Aritmetica de mes na mao, sem Date: o mes aqui e sempre 'yyyy-MM', e passar isso por Date so
-// abriria espaco pra fuso horario mudar a resposta.
+// Aritmetica de mes na mao: passar 'YYYY-MM' por Date so abre espaco pra fuso mudar a
+// resposta.
 function mesAnterior(ym) {
 	let [a, m] = [+ym.slice(0, 4), +ym.slice(5, 7)];
 	if (--m === 0) {
@@ -17,8 +13,7 @@ function mesAnterior(ym) {
 	return `${a}-${String(m).padStart(2, '0')}`;
 }
 
-// Filtro de mes por prefixo de texto: occurred_on e sempre 'yyyy-MM-DD', o que o CHECK da migration
-// 0002 agora garante.
+// Filtro por prefixo, que so funciona porque o CHECK da 0002 garante 'YYYY-MM-DD'.
 async function totalDo(env, ym) {
 	const r = await env.DB.prepare('select coalesce(sum(amount_cents),0) as t from transactions where occurred_on like ?')
 		.bind(`${ym}%`)
@@ -26,9 +21,8 @@ async function totalDo(env, ym) {
 	return r.t;
 }
 
-/* De que mes o usuario quer o relatorio. "relatorio" -> mes corrente "relatorio anterior" -> mes
-   passado (tambem aceita "passado") "relatorio 07" -> julho do ano corrente O ano nunca vem da
-   mensagem. */
+// "relatorio" = mes corrente, "anterior"/"passado" = mes passado, "relatorio 07" = julho
+// do ano corrente. Os  sao o que impede "relatorio 2025" de virar o mes 2.
 export function resolveMes(texto, hoje) {
 	const t = texto.toLowerCase();
 	const atual = hoje.slice(0, 7);
@@ -40,12 +34,10 @@ export function resolveMes(texto, hoje) {
 
 export async function relatorio(env, ym) {
 	const total = await totalDo(env, ym);
-	// Sai por aqui antes das outras duas queries, e ja dentro de bloco(): o mes vazio tambem vai com
-	// parse_mode MarkdownV2 e o ponto final derrubaria o envio se fosse texto cru.
-	if (total === 0) return bloco([nomeMes(ym), '', 'Nenhum gasto registrado.']);
+	if (total === 0) return bloco([nomeDoMes(ym), '', 'Nenhum gasto registrado.']);
 
-	// group by t.category_id e nao por c.name: sem categoria o join da NULL, e agrupar pelo id mantem
-	// todos os sem-categoria numa linha so.
+	// group by pelo id e nao por c.name: sem categoria o join da NULL, e o id mantem todos
+	// os sem-categoria numa linha so.
 	const { results: cats } = await env.DB.prepare(
 		`
     select coalesce(c.name, 'Sem categoria') as nome,
@@ -73,36 +65,29 @@ export async function relatorio(env, ym) {
 		.bind(`${ym}%`)
 		.all();
 
-	// Largura unica pras duas tabelas: a maior categoria, com piso de 12 pra caber 'Sem método' sem
-	// torcer a coluna.
-	const larg = Math.max(...cats.map((c) => c.nome.length), 12);
-	// A coluna 'teto' so e preenchida acima de 80% (celulaTeto decide). Duas colunas de porcentagem
-	// lado a lado.
+	const larg = Math.max(...cats.map((c) => c.nome.length), 12); // 12 cabe 'Sem método'
 	const linha = (nome, v, teto) =>
 		`${nome.padEnd(larg)}  ${brl(v).padStart(10)}  ${String(Math.round((v / total) * 100)).padStart(3)}%  ${celulaTeto(v, teto).padStart(4)}`.trimEnd();
 
 	const out = [
-		`${nomeMes(ym)} — R$ ${brl(total)}`,
+		`${nomeDoMes(ym)} — R$ ${brl(total)}`,
 		'',
 		...cats.map((c) => linha(c.nome, c.v, c.teto)),
 		'',
 		...pags.map((p) => `${(rotulo(p.m) ?? 'Sem método').padEnd(larg)}  ${brl(p.v).padStart(10)}`),
 	];
 
-	// O credito nao sai da conta no mes em que foi gasto, vai pra fatura. Separar os dois e a leitura
-	// que interessa pra saber quanto ainda da pra gastar.
+	// O credito nao sai da conta no mes em que foi gasto, vai pra fatura.
 	const credito = pags.find((p) => p.m === 'credito')?.v ?? 0;
 	if (credito) {
 		out.push('', `Sai da conta agora: R$ ${brl(total - credito)}`);
 		out.push(`Vai pra fatura:     R$ ${brl(credito)}`);
 	}
 
-	// Comparar so faz sentido com base pra comparar: 'ant > 0' cobre tanto o primeiro mes de uso
-	// quanto a divisao por zero logo abaixo.
-	const ant = await totalDo(env, mesAnterior(ym));
+	const ant = await totalDo(env, mesAnterior(ym)); // ant > 0 cobre o 1o mes e a divisao
 	if (ant > 0) {
 		const d = Math.round(((total - ant) / ant) * 100);
-		out.push('', `vs ${nomeMes(mesAnterior(ym))}: ${d >= 0 ? '+' : ''}${d}% (R$ ${brl(ant)})`);
+		out.push('', `vs ${nomeDoMes(mesAnterior(ym))}: ${d >= 0 ? '+' : ''}${d}% (R$ ${brl(ant)})`);
 	}
 
 	return bloco(out);

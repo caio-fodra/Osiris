@@ -1,15 +1,16 @@
-/* Consultar e corrigir pelo chat. */
+// Consultar e corrigir pelo chat: /extrato lista, /revisar mostra o que ficou sem
+// categoria, /buscar soma por termo, /editar conserta.
+// Importa vista/fmt/parser/orcamento; nunca handle.js.
 
 import { brl, dia, bloco } from './fmt.js';
 import { centavos, lerData, metodoDe, norm } from './parser.js';
-import { corpo, teclado } from './vista.js';
+import { corpo, teclado, ACAO } from './vista.js';
 import { estadoDaCategoria, avisoEstouro, nomeDoMes } from './orcamento.js';
 
-/* Quantos lancamentos por pagina do /extrato. 25 linhas de ~38 caracteres da ~950, folgado dentro
-   dos 4096 do Telegram. */
-const POR_PAGINA = 25;
+const POR_PAGINA = 25; // ~950 chars por pagina; o teto do Telegram e 4096
 
-/* Uma linha do extrato. Compartilhada com o /buscar pra as duas listas terem a mesma forma. */
+// Uma linha do extrato, compartilhada com o /buscar. O '?' marca o que precisa de
+// atencao, entao quem le o extrato ja ve a fila do /revisar de passagem.
 export function linhaExtrato(t) {
 	const duvida = t.category_id === null || t.confidence === null || t.confidence < 0.6 ? '?' : ' ';
 	const desc = (t.description ?? '—').slice(0, 18);
@@ -41,25 +42,25 @@ export async function extrato(env, ym, pagina = 0) {
 	const out = [`${nomeDoMes(ym)} · ${n} ${n === 1 ? 'lançamento' : 'lançamentos'} · R$ ${brl(total)}`, '', CABECALHO];
 	for (const t of linhas) out.push(linhaExtrato(t));
 	out.push('');
-	// O rodape e a documentacao do /editar, e fica dentro da cerca de propriosito: fora dela o
-	// MarkdownV2 exigiria escapar uma duzia de caracteres, que e exatamente o que o bloco() existe pra
-	// evitar.
+	// O rodape fica dentro da cerca: fora dela o MarkdownV2 exigiria escapar uma duzia de
+	// caracteres.
 	out.push(paginas > 1 ? `página ${pagina + 1} de ${paginas} · /editar <id> pra corrigir` : '/editar <id> pra corrigir');
 	return { texto: bloco(out), paginas };
 }
 
-/* Navegacao do extrato: setas so quando existe pagina do outro lado. */
+// O mes viaja no callback_data, senao a pagina 2 de julho mostra agosto.
 export const tecladoExtrato = (ym, pagina, paginas) => {
 	if (paginas <= 1) return undefined;
 	const btn = [];
-	if (pagina > 0) btn.push({ text: '←', callback_data: `ext:${ym}:${pagina - 1}` });
-	if (pagina + 1 < paginas) btn.push({ text: '→', callback_data: `ext:${ym}:${pagina + 1}` });
+	if (pagina > 0) btn.push({ text: '←', callback_data: `${ACAO.EXT}:${ym}:${pagina - 1}` });
+	if (pagina + 1 < paginas) btn.push({ text: '→', callback_data: `${ACAO.EXT}:${ym}:${pagina + 1}` });
 	return { inline_keyboard: [btn] };
 };
 
 // --- /revisar ------------------------------------------------------------------
 
-/* A fila do que precisa de atencao. 'confidence is null' entra alem do obvio: */
+// 'confidence is null' entra alem do obvio: em SQL 'null < 0.6' da NULL e nao casa, e
+// procedencia desconhecida e justamente coisa a revisar.
 export async function paraRevisar(env, limite = 5) {
 	const { results } = await env.DB.prepare(
 		`select t.id, t.occurred_on, t.amount_cents, t.description, t.method, t.category_id, t.confidence
@@ -78,14 +79,15 @@ export async function paraRevisar(env, limite = 5) {
 
 // --- /buscar -------------------------------------------------------------------
 
-/* Busca em descricao E em nome de categoria. Nos dois porque keywordDe escolhe a palavra mais longa
-   da descricao, entao 'Supermercado Pao de Acucar' ensina 'supermercado' e o nome da loja nao vira
-   categoria nenhuma: */
+// Busca em descricao e em nome de categoria: keywordDe aprende a palavra mais longa da
+// descricao, entao so um dos dois perderia metade das perguntas. raw_message fica fora,
+// senao '/buscar 120' casa com quase tudo.
 export async function buscar(env, termo) {
 	const alvo = norm(termo);
 	const { results: cats } = await env.DB.prepare('select id, name, name_norm from categories').all();
 	const ids = cats.filter((c) => c.name_norm?.includes(alvo)).map((c) => c.id);
 
+	// '%' e '_' do usuario sao curinga de LIKE: sem escape, '/buscar 100%' casa com o banco.
 	const escapado = alvo.replace(/[\\%_]/g, '\\$&');
 	const marcadores = ids.length ? ids.map(() => '?').join(', ') : 'null';
 
@@ -113,8 +115,7 @@ export function linhasDaBusca(termo, achados) {
 	}
 
 	const out = [`"${termo}" · ${achados.length} ${achados.length === 1 ? 'lançamento' : 'lançamentos'} · R$ ${brl(total)}`, ''];
-	// Quebra por mes e a resposta interessante: "quanto gastei no Outback" quase nunca e pergunta
-	// sobre o mes corrente.
+	// Quebra por mes: "quanto gastei no Outback" quase nunca e pergunta sobre o mes corrente.
 	for (const [ym, m] of [...porMes.entries()].sort().reverse()) {
 		out.push(`${ym}  ${brl(m.v).padStart(10)}  ${String(m.n).padStart(3)}x`);
 	}
@@ -129,8 +130,9 @@ export function linhasDaBusca(termo, achados) {
 
 // --- /editar -------------------------------------------------------------------
 
-/* Os campos editaveis, e a tabela e a unica fonte do nome da coluna. Object.hasOwn e nao
-   CAMPOS[campo]: */
+// A tabela e a unica fonte do nome da coluna. raw_message, parser e confidence ficam de
+// fora: sao a trilha de procedencia, e editar destroi a distincao entre palpite do regex,
+// regra aprendida e escolha no botao.
 const CAMPOS = {
 	valor: { col: 'amount_cents', rotulo: 'Valor' },
 	data: { col: 'occurred_on', rotulo: 'Data' },
@@ -139,7 +141,8 @@ const CAMPOS = {
 	metodo: { col: 'method', rotulo: 'Método' },
 };
 
-/* Aceita 'descricao' e 'descrição', 'metodo' e 'método'. */
+// Aceita 'descricao' e 'descrição': o norm() e o mesmo que normaliza tudo que o usuario
+// digita, entao acento nunca decide se o comando funciona. hasOwn pelo motivo do parser.js.
 export const campoValido = (campo) => {
 	const n = norm(campo);
 	return Object.hasOwn(CAMPOS, n) ? n : null;
@@ -147,7 +150,20 @@ export const campoValido = (campo) => {
 
 export const CAMPOS_LISTA = Object.keys(CAMPOS).join(', ');
 
-/* Valida o valor novo de um campo. Devolve {valor} pra gravar, ou {erro} pro chat. */
+// Parcela nao se edita sozinha: valor quebra a soma do grupo, metodo grava estado que o
+// parser recusa e some do /fatura, e data move a parcela pra fora da fatura dela.
+// Categoria passa, e vai pro grupo inteiro.
+export const recusaParcelada = (tx, campo) =>
+	tx.installment_group !== null && campo !== 'categoria'
+		? `#${tx.id} é a parcela ${tx.installment_no}/${tx.installment_of} de uma compra parcelada. ` +
+			`Só dá pra mudar a categoria — pro resto, apaga o grupo pelo botão e lança de novo.`
+		: null;
+
+/**
+ * Cada validador reusa o que o lancamento ja usa (centavos, lerData, metodoDe, name_norm),
+ * entao o /editar aceita exatamente o que uma mensagem de gasto aceita.
+ * @returns {{valor:any,nome?:string}|{erro:string}}
+ */
 export async function validarCampo(env, campo, cru, hoje) {
 	if (campo === 'valor') {
 		const c = centavos(cru);
@@ -165,7 +181,8 @@ export async function validarCampo(env, campo, cru, hoje) {
 		return { valor: m };
 	}
 	if (campo === 'descricao') {
-		// Corta em 80: e a largura que o extrato mostra e o limite que mantem a mensagem dentro dos 4096.
+		// Corta em 80, a largura que o extrato mostra. Nao reaprende keyword nem recategoriza:
+		// corrigir um typo nao pode mover dinheiro entre categorias.
 		const d = norm(cru).slice(0, 80);
 		if (!d) return { erro: 'Descrição vazia.' };
 		return { valor: d };
@@ -176,7 +193,8 @@ export async function validarCampo(env, campo, cru, hoje) {
 	return { valor: cat.id, nome: cat.name };
 }
 
-/* Le a transacao e monta o detalhe com teclado. */
+// Reata os botoes a um lancamento antigo, cuja confirmacao ja se perdeu no chat. E o unico
+// lugar em que a descricao volta pro usuario: o resumo nunca a mostrou.
 export async function detalhe(env, tx, cats) {
 	const estado = await estadoDaCategoria(env, tx.category_id, tx.occurred_on.slice(0, 7));
 	const linhas = [corpo(tx.amount_cents, estado, tx.method, tx.occurred_on)];
@@ -187,14 +205,21 @@ export async function detalhe(env, tx, cats) {
 	};
 }
 
-/* Aplica a edicao e devolve o texto do antes->depois. Antes->depois e o que prova ao usuario que a
-   linha certa mudou. */
+// O antes->depois e o que prova ao usuario que a linha certa mudou.
 export async function aplicarEdicao(env, tx, campo, novo, hoje) {
 	const { col, rotulo: rot } = CAMPOS[campo];
 	const antes = tx[col];
 
-	// col vem da tabela CAMPOS, literal neste arquivo, nunca do usuario.
-	await env.DB.prepare(`update transactions set ${col} = ? where id = ?`).bind(novo.valor, tx.id).run();
+	// Mesmo alvo do onCallback: categoria fala do grupo, o resto fala da linha. Uma categoria
+	// por parcela faria a mesma compra aparecer em tres categorias, cada uma com um terco.
+	const grupo = tx.installment_group;
+	const porGrupo = campo === 'categoria' && grupo !== null;
+	const alvoSql = porGrupo ? 'installment_group = ?' : 'id = ?';
+	const alvoVal = porGrupo ? grupo : tx.id;
+
+	// col vem da tabela CAMPOS, literal neste arquivo e nunca do usuario, entao pode ser
+	// interpolado. Quem escolhe a entrada e o campoValido().
+	await env.DB.prepare(`update transactions set ${col} = ? where ${alvoSql}`).bind(novo.valor, alvoVal).run();
 
 	const mostrar = async (v) => {
 		if (campo === 'valor') return `R$ ${brl(v)}`;

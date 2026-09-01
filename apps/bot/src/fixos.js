@@ -1,19 +1,22 @@
-/* Contas fixas: o que cai todo mes no mesmo dia. */
+// Contas fixas. Valor conhecido o bot lanca sozinho e avisa; valor variavel ele pergunta,
+// pq chutar o valor de uma conta que muda todo mes e o que o parser se recusa a fazer.
+// O lancamento gerado e uma transaction comum com parser = 'fixo'.
 
-import { brl, brlInt, bloco } from './fmt.js';
+import { brl, brlInt } from './fmt.js';
 import { centavos, norm, ultimoDia, metodoDe, isMetodo } from './parser.js';
 import { nomeDoMes } from './orcamento.js';
 
-/* O dia em que a conta cai neste mes. due_day guarda o dia do papel (pode ser 31). */
+// due_day guarda o dia do papel e pode ser 31. Aqui ele e preso ao ultimo dia do mes em
+// vez de rolar pro seguinte, a mesma escolha da 0002 com '2026-02-31'.
 export const diaEfetivo = (dueDay, ym) => Math.min(dueDay, ultimoDia(ym.slice(0, 4), +ym.slice(5, 7)));
 
-/* A data ISO em que a conta cai neste mes. */
 export const dataDaConta = (dueDay, ym) => `${ym}-${String(diaEfetivo(dueDay, ym)).padStart(2, '0')}`;
 
 // --- Cadastro (/fixo) ----------------------------------------------------------
 
-/* Le os tokens de '/fixo <nome...> <dia> [valor] [metodo]'. Aqui a posicao importa, e e o unico
-   lugar do bot onde importa. */
+// '/fixo <nome...> <dia> [valor] [metodo]'. Aqui a posicao importa, e e o unico lugar do
+// bot onde importa: dia e valor tem a mesma forma, entao dia = o primeiro token de 1 ou 2
+// digitos e valor = o ultimo depois dele. O resto, na ordem, e o nome.
 export function lerFixo(arg) {
 	const tokens = arg.split(/\s+/).filter(Boolean);
 	let dia = null,
@@ -41,12 +44,12 @@ export function lerFixo(arg) {
 	return { nome: nome.join(' ').trim(), dia, valor, metodo };
 }
 
-/* O unico gargalo de escrita do name_norm de fixed_bills. */
+// Unico gargalo de escrita do name_norm de fixed_bills, mesma disciplina do criarCategoria.
 export async function salvarFixa(env, { nome, dia, valor, metodo, categoryId = null }) {
 	const limpo = nome.replace(/\s+/g, ' ').trim().slice(0, 40);
 	const kind = valor === null ? 'variavel' : 'fixo';
-	// 'do update' e nao 'do nothing', diferente do /categoria: repetir '/fixo aluguel 5 1980 pix' e o
-	// jeito natural de dizer "o aluguel subiu", ou seja carrega dado novo.
+	// 'do update' e nao 'do nothing' como no /categoria: repetir '/fixo aluguel 5 1980 pix' e
+	// o jeito natural de dizer que o aluguel subiu, ou seja carrega dado novo.
 	const r = await env.DB.prepare(
 		`insert into fixed_bills (name, name_norm, kind, amount_cents, due_day, method, category_id)
      values (?, ?, ?, ?, ?, ?, ?)
@@ -67,7 +70,7 @@ export async function listarFixas(env) {
 	return results;
 }
 
-/* A lista, lida como calendario: ordenada por dia e nao por nome. */
+// Ordenada por dia e nao por nome: le-se como calendario.
 export function linhasDasFixas(fixas, ym) {
 	if (!fixas.length) return ['Nenhuma conta fixa. Cadastre com: /fixo aluguel 5 1850 pix'];
 
@@ -91,8 +94,8 @@ export function linhasDasFixas(fixas, ym) {
 
 // --- O cron diario -------------------------------------------------------------
 
-/* As contas que vencem hoje e ainda nao foram tratadas neste mes. min(due_day, ?) e o min escalar
-   do SQLite, com o ultimo dia do mes vindo do JS pra a SQL ficar legivel. */
+// min(due_day, ?) e o min escalar do SQLite, com o ultimo dia do mes vindo do JS pra a SQL
+// ficar legivel. Nao usa date(): rolar pra frente e o bug que a 0002 reparou.
 export async function fixasDeHoje(env, hoje) {
 	const ym = hoje.slice(0, 7);
 	const diaHoje = +hoje.slice(8, 10);
@@ -108,7 +111,8 @@ export async function fixasDeHoje(env, hoje) {
 	return results;
 }
 
-/* Reserva o mes da conta. Devolve false se alguem chegou antes. */
+// O 'returning' e o que faz isto valer como trava: sem linha de volta o mes ja foi tratado
+// e o chamador sai calado.
 export async function reservarMes(env, billId, ym, state) {
 	const r = await env.DB.prepare(
 		`insert into fixed_bill_posts (bill_id, due_month, state) values (?, ?, ?)
@@ -120,8 +124,10 @@ export async function reservarMes(env, billId, ym, state) {
 	return !!r;
 }
 
-/* Um gasto igual a esta conta ja foi digitado a mao neste mes? Heuristica, e a unica do arquivo. */
-export async function jaLancadaAMao(env, bill, ym) {
+// Heuristica, e a unica do arquivo: valor exato + metodo + categoria + mes. Erra pro lado
+// de mostrar. categoryId vem do chamador e nao de bill.category_id, que e NULL no caso
+// normal, senao a busca nunca casa com o gasto digitado a mao e o cron duplica.
+export async function jaLancadaAMao(env, bill, ym, categoryId) {
 	if (bill.kind !== 'fixo') return null;
 	return env.DB.prepare(
 		`select id from transactions
@@ -129,12 +135,13 @@ export async function jaLancadaAMao(env, bill, ym) {
         and parser <> 'fixo'
       limit 1`,
 	)
-		.bind(`${ym}%`, bill.amount_cents, bill.method, bill.category_id)
+		.bind(`${ym}%`, bill.amount_cents, bill.method, categoryId)
 		.first();
 }
 
-/* Grava o lancamento da conta fixa e amarra no ledger. A ORDEM dos tres passos e a escolha de qual
-   falha e aceitavel: */
+// A ordem dos tres passos escolhe qual falha e aceitavel: reserva o mes, grava o gasto,
+// amarra os dois. Morrer entre 1 e 2 deixa um mes sem lancamento, que e visivel; a ordem
+// inversa reposta todo dia, e duplicata que ninguem ve nao tem conserto.
 export async function lancarFixa(env, bill, ym, categoryId) {
 	const iso = dataDaConta(bill.due_day, ym);
 	const row = await env.DB.prepare(
@@ -153,7 +160,6 @@ export async function lancarFixa(env, bill, ym, categoryId) {
 	return { id: row.id, iso };
 }
 
-/* Marca o mes como pulado, sem lancar nada. */
 export const pularMes = (env, billId, ym, txId = null) =>
 	env.DB.prepare(
 		`insert into fixed_bill_posts (bill_id, due_month, state, transaction_id) values (?, ?, 'pulado', ?)
@@ -162,11 +168,9 @@ export const pularMes = (env, billId, ym, txId = null) =>
 		.bind(billId, ym, txId)
 		.run();
 
-/* Guarda o message_id da pergunta, pra reconhecer a resposta por reply_to_message. */
 export const marcarPergunta = (env, billId, ym, messageId) =>
 	env.DB.prepare('update fixed_bill_posts set prompt_message_id = ? where bill_id = ? and due_month = ?').bind(messageId, billId, ym).run();
 
-/* A pendencia que esta mensagem respondeu, se houver. */
 export const pendentePorMensagem = (env, messageId) =>
 	env.DB.prepare(
 		`select p.bill_id, p.due_month, b.name, b.due_day, b.category_id, b.method
@@ -176,7 +180,6 @@ export const pendentePorMensagem = (env, messageId) =>
 		.bind(messageId)
 		.first();
 
-/* Quanto foi a mesma conta no mes anterior. */
 export async function ultimoValor(env, billId) {
 	const r = await env.DB.prepare(
 		`select t.amount_cents, p.due_month
@@ -189,14 +192,15 @@ export async function ultimoValor(env, billId) {
 	return r;
 }
 
-/* A pergunta da conta variavel. force_reply e o argumento inteiro pro fluxo por resposta: */
+// force_reply abre o teclado do celular ja apontado pra esta mensagem. Teclado inline nao
+// serve: valor livre exigiria doze botoes e tres toques pra digitar 183,40.
 export function textoDaPergunta(bill, ultimo) {
 	const ref = ultimo ? `\nEm ${nomeDoMes(ultimo.due_month)} foi R$ ${brl(ultimo.amount_cents)}.` : '';
 	return `${bill.name} vence hoje (dia ${bill.due_day}). Quanto foi?\nResponde só o valor.${ref}`;
 }
 
-/* A categoria da conta, quando ela nao tem uma fixada: resolvida pelas category_rules a partir do
-   nome, exatamente como uma mensagem digitada resolveria. */
+// Resolve pelas category_rules a partir do nome, como uma mensagem digitada resolveria. E
+// o que faz um clique no botao de categoria consertar todos os meses seguintes.
 export async function categoriaPorRegra(env, nome) {
 	const tokens = norm(nome)
 		.split(' ')
@@ -210,5 +214,3 @@ export async function categoriaPorRegra(env, nome) {
 }
 
 export const textoDoLancamento = (bill) => `fixa: ${bill.name} — lancei sozinho`;
-
-export { bloco };

@@ -1,9 +1,6 @@
-/* Fatura de cartao e parcelamento. O report.js ja raciocinava sobre isso. */
-
 import { brl } from './fmt.js';
 import { nomeDoMes } from './orcamento.js';
 
-/* Aritmetica de mes sobre 'yyyy-MM', sem Date. */
 export function somaMes(ym, n) {
 	const a = +ym.slice(0, 4);
 	const m = +ym.slice(5, 7) - 1 + n;
@@ -12,23 +9,34 @@ export function somaMes(ym, n) {
 	return `${ano}-${String(mes + 1).padStart(2, '0')}`;
 }
 
-/* A janela de compras de uma fatura: {ini, fim}, os dois 'yyyy-MM-DD' e inclusivos. */
+/**
+ * @param {string} ym          'YYYY-MM' da fatura
+ * @param {number} fechamento  dia do fechamento, 1..28 pelo CHECK da 0008
+ * @returns {{ini:string,fim:string}} janela de compras com 'ini' EXCLUSIVO e 'fim'
+ *   inclusivo, do jeito que os chamadores usam: occurred_on > ini and occurred_on <= fim
+ */
 export function janelaFatura(ym, fechamento) {
 	const d = String(fechamento).padStart(2, '0');
-	return { ini: `${somaMes(ym, -1)}-${d}`, fim: `${ym}-${d}`, iniExclusivo: true };
+	// Comparacao de texto, nao date(): occurred_on e sempre 'YYYY-MM-DD' pelo CHECK da 0002.
+	return { ini: `${somaMes(ym, -1)}-${d}`, fim: `${ym}-${d}` };
 }
 
-/* Em qual fatura cai uma compra feita nesta data. Compra no dia do fechamento ou antes: */
+// A regra do cartao, escrita num lugar so.
 export const mesFatura = (iso, fechamento) => (+iso.slice(8, 10) <= fechamento ? iso.slice(0, 7) : somaMes(iso.slice(0, 7), 1));
 
-/* Divide o total em parcelas de centavos inteiros. A ultima absorve o resto: */
+// R$ 100,00 em 3x = 33,33 / 33,33 / 33,34. A ultima sai por subtracao, entao a soma
+// fecha com o total por construcao e nao por sorte de arredondamento.
 export function dividir(total, n) {
 	const base = Math.floor(total / n);
 	return Array.from({ length: n }, (_, i) => (i === n - 1 ? total - base * (n - 1) : base));
 }
 
-/* Uma compra parcelada -> as N linhas que vao pra transactions. A parcela 1 fica na data REAL da
-   compra: */
+/**
+ * @param {{amount_cents:number,occurred_on:string,parcelas:number,fechamento:number}} compra
+ * @returns {object[]} as N linhas de transactions. A parcela 1 fica na data real da
+ *   compra; as 2..N caem no dia do fechamento, contadas a partir do mes de fatura e nao
+ *   do mes do calendario, senao as parcelas 1 e 2 caem na mesma fatura.
+ */
 export function parcelasDe({ amount_cents, occurred_on, parcelas, fechamento }) {
 	const valores = dividir(amount_cents, parcelas);
 	const faturaDaCompra = mesFatura(occurred_on, fechamento);
@@ -43,8 +51,6 @@ export function parcelasDe({ amount_cents, occurred_on, parcelas, fechamento }) 
 	}));
 }
 
-/* A segunda linha do resumo quando ha parcelamento. O valor da primeira linha continua sendo o
-   total digitado, que e o que o usuario acabou de mandar. */
 export function linhaParcelas(total, parcelas, primeiroMes) {
 	const valores = dividir(total, parcelas);
 	const iguais = valores[0] === valores.at(-1);

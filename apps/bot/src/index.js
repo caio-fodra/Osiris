@@ -155,8 +155,12 @@ async function umaFixa(env, bill, ym) {
 		return;
 	}
 
+	// A categoria resolvida uma vez, antes do dedup: e ela que vai pro lancamento la embaixo, entao e
+	// contra ela que o dedup tem que comparar.
+	const catId = bill.category_id ?? (await categoriaPorRegra(env, bill.name));
+
 	// Conta de valor fixo: ja foi digitada a mao neste mes?
-	const jaTem = await jaLancadaAMao(env, bill, ym);
+	const jaTem = await jaLancadaAMao(env, bill, ym, catId);
 	if (jaTem) {
 		await pularMes(env, bill.id, ym, jaTem.id);
 		await tg(env, 'sendMessage', {
@@ -168,7 +172,6 @@ async function umaFixa(env, bill, ym) {
 
 	if (!(await reservarMes(env, bill.id, ym, 'lancado'))) return;
 
-	const catId = bill.category_id ?? (await categoriaPorRegra(env, bill.name));
 	const { id, iso } = await lancarFixa(env, bill, ym, catId);
 	const estado = await estadoDaCategoria(env, catId, ym);
 
