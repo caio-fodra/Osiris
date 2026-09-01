@@ -1,7 +1,7 @@
 import { parse, centavos, norm, LABEL, isMetodo, rotulo } from './parser.js';
 import { brl, dia, bloco } from './fmt.js';
 import { relatorio, resolveMes } from './report.js';
-import { estadoDaCategoria, tabelaOrcamentos, avisoEstouro, linhasDoOrcamento } from './orcamento.js';
+import { estadoDaCategoria, tabelaOrcamentos, avisoEstouro, linhasDoOrcamento, nomeDoMes } from './orcamento.js';
 import { corpo, resumo, teclado, emLinhas, ACAO, ACOES } from './vista.js';
 import {
 	lerFixo,
@@ -89,6 +89,9 @@ const ERRO = {
 	data_invalida: 'Data inválida. Use dd/mm, ou dd/mm/aaaa no ano corrente: 12/08.',
 	data_ambigua: 'Achei mais de uma data. Manda só uma: 120 mercado 12/08',
 	metodo_ambiguo: 'Achei mais de uma forma de pagamento. Manda só uma: 120 mercado credito',
+	parcelas_invalidas: 'Parcelas de 1 a 24. Formato: 300 sofá 3x credito',
+	parcelas_ambiguas: 'Achei mais de um parcelamento. Manda só um: 300 sofá 3x credito',
+	parcelas_sem_credito: 'Parcelado só no crédito. Tira o método, ou usa credito: 300 sofá 3x',
 };
 
 // Carrega a tabela de regras inteira a cada mensagem. Sao poucas dezenas de linhas, e o parser
@@ -135,6 +138,48 @@ function keywordDe(desc) {
 		.split(/\s+/)
 		.filter((w) => w.length > 2 && ePalavra(w) && !isMetodo(w))
 		.sort((a, b) => b.length - a.length)[0];
+}
+
+/* O dia de fechamento do cartao. Uma linha na tabela config, com default 28. */
+async function fechamentoDaFatura(env) {
+	const r = await env.DB.prepare('select invoice_closing_day as dia from config where id = 1').first();
+	return r?.dia ?? 28;
+}
+
+/* Grava as N linhas de uma compra parcelada, e devolve a primeira. DB.batch e nao um insert de N
+   linhas: */
+async function inserirParceladas(env, p, texto, updateId) {
+	const fechamento = await fechamentoDaFatura(env);
+	const linhas = parcelasDe({ amount_cents: p.amount_cents, occurred_on: p.occurred_on, parcelas: p.parcelas, fechamento });
+
+	const sql = `insert into transactions
+      (amount_cents, occurred_on, category_id, method, description, raw_message, parser,
+       confidence, tg_update_id, installment_group, installment_no, installment_of, purchased_on)
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict do nothing
+    returning id`;
+
+	const res = await env.DB.batch(
+		linhas.map((l, i) =>
+			env.DB.prepare(sql).bind(
+				l.amount_cents,
+				l.occurred_on,
+				p.category_id,
+				p.method,
+				p.description,
+				texto,
+				p.parser,
+				p.confidence,
+				i === 0 ? updateId : null,
+				updateId,
+				l.installment_no,
+				l.installment_of,
+				l.purchased_on,
+			),
+		),
+	);
+
+	return res[0]?.results?.[0] ?? null;
 }
 
 async function onMessage(msg, env, updateId) {
@@ -316,6 +361,90 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
+	// /fatura.
+	const mFat = texto.match(/^[/]?fatura(?:[ ]+(.+))?$/i);
+	if (mFat) {
+		const arg = mFat[1]?.trim();
+		const mFech = arg?.match(/^fechamento[ ]+(""" + BS + """d{1,2})$/i);
+		if (mFech) {
+			const d = +mFech[1];
+			if (d < 1 || d > 28) {
+				await tg(env, 'sendMessage', {
+					chat_id: msg.chat.id,
+					text: `Fechamento de 1 a 28 (dia 29, 30 e 31 não existem em todo mês). Hoje: ${await fechamentoDaFatura(env)}.`,
+				});
+				return;
+			}
+			await env.DB.prepare('update config set invoice_closing_day = ? where id = 1').bind(d).run();
+			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: `Fatura passa a fechar no dia ${d}.` });
+			return;
+		}
+
+		const fechamento = await fechamentoDaFatura(env);
+		const ym = arg ? resolveMes(arg, hoje) : mesFatura(hoje, fechamento);
+		const { ini, fim } = janelaFatura(ym, fechamento);
+
+		// Janela por between de texto, nao por prefixo de mes: e a diferenca entre a fatura e o mes do
+		// calendario, e de quebra usa o idx_tx_data melhor que o LIKE.
+		const [cats, abertas] = await env.DB.batch([
+			env.DB.prepare(
+				`select coalesce(c.name, 'Sem categoria') as nome, sum(t.amount_cents) as v
+           from transactions t left join categories c on c.id = t.category_id
+          where t.method = 'credito' and t.occurred_on > ? and t.occurred_on <= ?
+          group by t.category_id order by v desc`,
+			).bind(ini, fim),
+			env.DB.prepare(
+				`select description, installment_no, installment_of, amount_cents
+           from transactions
+          where installment_group is not null and occurred_on > ? and occurred_on <= ?
+          order by installment_of - installment_no desc`,
+			).bind(ini, fim),
+		]);
+
+		const linhas = cats.results;
+		const total = linhas.reduce((sm, c) => sm + c.v, 0);
+		const larg = Math.max(12, ...linhas.map((c) => c.nome.length));
+		const out = [`Fatura de ${nomeDoMes(ym)} · fecha ${dia(fim)}`, `compras de ${dia(ini)} a ${dia(fim)}`, ''];
+
+		if (!linhas.length) out.push('Nada no crédito nesta fatura.');
+		else {
+			for (const c of linhas) {
+				out.push(`${c.nome.padEnd(larg)}  ${brl(c.v).padStart(10)}  ${String(Math.round((c.v / total) * 100)).padStart(3)}%`);
+			}
+			out.push('', `${'Total'.padEnd(larg)}  ${brl(total).padStart(10)}`);
+		}
+
+		// As parcelas em aberto por nome, porque "por que outubro ja esta em R$ 420" e a pergunta que
+		// este bloco existe pra responder.
+		if (abertas.results.length) {
+			out.push('', 'Parcelas nesta fatura');
+			for (const a of abertas.results) {
+				out.push(
+					`${(a.description ?? '—').slice(0, larg).padEnd(larg)}  ${`${a.installment_no}/${a.installment_of}`.padStart(5)}  ${brl(a.amount_cents).padStart(9)}`,
+				);
+			}
+		}
+
+		// O que ja esta comprometido nos dois meses seguintes.
+		const proximos = await env.DB.batch(
+			[1, 2].map((k) => {
+				const j = janelaFatura(somaMes(ym, k), fechamento);
+				return env.DB.prepare(
+					`select coalesce(sum(amount_cents), 0) as v from transactions
+             where method = 'credito' and occurred_on > ? and occurred_on <= ?`,
+				).bind(j.ini, j.fim);
+			}),
+		);
+		const comprometido = proximos.map((r, i) => ({ ym: somaMes(ym, i + 1), v: r.results[0].v })).filter((x) => x.v > 0);
+		if (comprometido.length) {
+			out.push('', 'Já comprometido');
+			for (const c of comprometido) out.push(`${nomeDoMes(c.ym).padEnd(larg)}  ${brl(c.v).padStart(10)}`);
+		}
+
+		await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: bloco(out), parse_mode: 'MarkdownV2' });
+		return;
+	}
+
 	// /fixo.
 	const mFixo = texto.match(/^[/]?fixo(?:[ ]+(.+))?$/i);
 	if (mFixo) {
@@ -443,6 +572,9 @@ async function onMessage(msg, env, updateId) {
 				'Para definir um teto mensal use /orcamento <categoria> <valor>\n' +
 				'Use /orcamento sozinho para ver gasto x teto de cada categoria.\n' +
 				'Use /relatorio para ver o resumo do mês.\n' +
+				'Parcelado no cartão: 300 sofá 3x credito (o 300 é o total).\n' +
+				'Use /fatura para ver o que fecha na próxima fatura.\n' +
+				'Use /fatura fechamento 28 para dizer o dia em que seu cartão fecha.\n' +
 				'Use /extrato para listar os lançamentos do mês, com o id de cada um.\n' +
 				'Use /revisar para acertar o que ficou sem categoria.\n' +
 				'Use /buscar <palavra> para somar o que gastou com algo.\n' +
@@ -485,10 +617,12 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
-	// tg_update_id e unique, e o 'do nothing' torna o insert idempotente: se o mesmo update chegar
-	// duas vezes, a segunda nao grava e nao devolve linha.
-	const row = await env.DB.prepare(
-		`
+	// Parcelado ou nao, o insert e idempotente. Sem parcela, pelo UNIQUE de tg_update_id; com parcela,
+	// pelo indice unico (installment_group, installment_no).
+	const row = p.parcelas
+		? await inserirParceladas(env, p, texto, updateId)
+		: await env.DB.prepare(
+				`
     insert into transactions
       (amount_cents, occurred_on, category_id, method, description,
        raw_message, parser, confidence, tg_update_id)
@@ -496,9 +630,9 @@ async function onMessage(msg, env, updateId) {
     on conflict(tg_update_id) do nothing
     returning id
   `,
-	)
-		.bind(p.amount_cents, p.occurred_on, p.category_id, p.method, p.description, texto, p.parser, p.confidence, updateId)
-		.first();
+			)
+				.bind(p.amount_cents, p.occurred_on, p.category_id, p.method, p.description, texto, p.parser, p.confidence, updateId)
+				.first();
 
 	// Sem linha = o update ja tinha sido processado. Sair calado e o certo:
 	if (!row) return;
@@ -511,10 +645,17 @@ async function onMessage(msg, env, updateId) {
 	// So busca as categorias se ainda faltar uma.
 	const cats = p.category_id ? [] : await categoriasPorUso(env);
 
+	// O valor da primeira linha continua sendo o TOTAL digitado, que e o que o usuario acabou de
+	// mandar.
+	const linhaParc = p.parcelas
+		? linhaParcelas(p.amount_cents, p.parcelas, mesFatura(p.occurred_on, await fechamentoDaFatura(env)), brl, nomeDoMes)
+		: null;
+
 	await tg(env, 'sendMessage', {
 		chat_id: msg.chat.id,
-		text: corpo(p.amount_cents, estado, p.method, p.occurred_on),
-		reply_markup: { inline_keyboard: teclado(row.id, p.category_id, p.method, cats) },
+		text: [corpo(p.amount_cents, estado, p.method, p.occurred_on), linhaParc].filter(Boolean).join('\n'),
+		// Parcelado ja e credito por definicao, entao o teclado nao oferece metodo.
+		reply_markup: { inline_keyboard: teclado(row.id, p.category_id, p.parcelas ? 'credito' : p.method, cats) },
 	});
 
 	// O aviso de estouro vai em mensagem separada.
@@ -559,9 +700,14 @@ async function onCallback(cb, env) {
 	// Some quando o usuario clica num botao de mensagem antiga cuja transacao ja foi apagada.
 	if (!tx) return ack('sumiu');
 
+	// O alvo de toda operacao: a linha, ou o grupo inteiro se a compra for parcelada.
+	const grupo = tx.installment_group;
+	const alvoSql = grupo === null ? 'id = ?' : 'installment_group = ?';
+	const alvoVal = grupo === null ? txId : grupo;
+
 	if (acao === ACAO.DEL) {
-		await env.DB.prepare('delete from transactions where id = ?').bind(txId).run();
-		await ack('apagado');
+		const r = await env.DB.prepare(`delete from transactions where ${alvoSql}`).bind(alvoVal).run();
+		await ack(grupo === null ? 'apagado' : `apagado (${r.meta.changes} parcelas)`);
 		// Troca o texto pra mensagem antiga nao continuar parecendo um gasto vivo.
 		return tg(env, 'editMessageText', {
 			chat_id: cb.message.chat.id,
@@ -576,6 +722,8 @@ async function onCallback(cb, env) {
 		// callback_data volta do Telegram como texto solto: nada garante que e uma das strings que
 		// teclado() montou.
 		if (!rotulo(valor)) return ack('metodo invalido');
+		// Parcelado e credito por definicao.
+		if (grupo !== null) return ack('parcelado e sempre no credito');
 		await env.DB.prepare('update transactions set method = ? where id = ?').bind(valor, txId).run();
 		tx.method = valor;
 	}
@@ -594,9 +742,9 @@ async function onCallback(cb, env) {
 		// parser vira 'manual' e confidence 1: foi o usuario quem disse, nao o regex.
 		const upd = await env.DB.prepare(
 			`update transactions set category_id = ?, parser = ?, confidence = 1
-        where id = ? and (category_id is null or category_id <> ?)`,
+        where ${alvoSql} and (category_id is null or category_id <> ?)`,
 		)
-			.bind(cat.id, 'manual', txId, cat.id)
+			.bind(cat.id, 'manual', alvoVal, cat.id)
 			.run();
 
 		// cat.id e nao 'valor': valor e a string crua do callback_data, e daqui ela ia direto pro objeto
@@ -604,7 +752,7 @@ async function onCallback(cb, env) {
 		tx.category_id = cat.id;
 
 		// Aprende com a correcao: precisar clicar no botao significa que o parser errou.
-		mudouCategoria = upd.meta.changes === 1;
+		mudouCategoria = upd.meta.changes > 0;
 
 		if (mudouCategoria) {
 			const kw = keywordDe(tx.description);

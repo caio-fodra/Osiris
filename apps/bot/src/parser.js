@@ -37,6 +37,13 @@ const RE_VALOR = /^(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+,\d{2}|\d+(?:[.,]\d{1,2})?)$/;
 // que impede token com cara de data de vazar pra descricao:
 const RE_DATA = /^(\d{1,2})\/(\d{1,2})(?:\/(\d*))?$/;
 
+// '3x', '12x'. Nao colide com RE_VALOR:
+const RE_PARCELAS = /^(\d{1,3})x$/;
+
+// 24 = dois anos de fatura, o teto real do varejo brasileiro. O mesmo numero esta no CHECK da
+// migration 0008, e os dois tem que concordar.
+const MAX_PARCELAS = 24;
+
 // '1.234,56' (ponto de milhar) e '1.50' (ponto decimal) chegam os dois aqui. A virgula desempata:
 function toCents(s) {
 	if (s.includes('.') && s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
@@ -47,7 +54,12 @@ function toCents(s) {
 // O preparo que toda entrada de valor atravessa, seja a mensagem inteira ou o token solto do
 // /orcamento. Existe como funcao porque centavos() refazia dois dos passos do norm() na mao e
 // repetia o colapso do 'r$':
-const preparado = (s) => norm(String(s)).replace(/r\$\s*/g, 'r$');
+const preparado = (s) =>
+	norm(String(s))
+		.replace(/r\$\s*/g, 'r$')
+		// '3 x' colado em '3x', mesma ideia do 'r$ 120' -> 'r$120' acima: o usuario espaca como quiser e
+		// o tokenizador ve uma coisa so.
+		.replace(/(\d) x(?![a-z0-9])/g, '$1x');
 
 /* Valor isolado ('800', '42,90', 'R$ 1.234,56') -> centavos, ou null se o texto nao for um valor. */
 export function centavos(txt) {
@@ -109,7 +121,10 @@ export function parse(msg, { rules, hoje }) {
 	let numeros = 0,
 		datas = 0,
 		metodos = 0,
-		dataRuim = false;
+		dataRuim = false,
+		parcelas = 1,
+		vistasX = 0,
+		parcelaRuim = false;
 	const sobra = [];
 
 	for (const tk of tokens) {
@@ -119,6 +134,18 @@ export function parse(msg, { rules, hoje }) {
 			// virar valor_ambiguo la embaixo.
 			numeros++;
 			if (cents === null) cents = toCents(mv[1]);
+			continue;
+		}
+
+		const mp = tk.match(RE_PARCELAS);
+		if (mp) {
+			// Conta antes de validar, igual ao ramo do valor: e a contagem que faz '300 sofa 3x 6x' virar
+			// parcelas_ambiguas em vez de escolher uma das duas.
+			vistasX++;
+			const n = +mp[1];
+			// '1x' nao e erro: e uma compra normal dita de outro jeito.
+			if (n < 1 || n > MAX_PARCELAS) parcelaRuim = true;
+			else if (parcelas === 1) parcelas = n;
 			continue;
 		}
 
@@ -151,6 +178,15 @@ export function parse(msg, { rules, hoje }) {
 	// reclamaria de valor zerado e "50 mercado 0" de ambiguidade: dois erros
 	// diferentes pros mesmos tokens, quebrando a promessa de que a ordem dos
 	// tokens nao importa.
+	// Parcelamento existe SO no credito. Entao 'x' sem metodo na mensagem nao e chute
+	// nosso, e declaracao dele -- '300 sofa 3x' nao tem outra leitura. Ja 'x' junto de
+	// pix, debito ou dinheiro e contradicao, e contradicao aqui sempre vira erro.
+	//
+	// metodoDito guarda se o metodo veio do USUARIO ou daqui: a confidence la embaixo nao
+	// pode subir pra 1 por causa de um metodo que nos deduzimos.
+	const metodoDito = method !== null;
+	if (parcelas > 1 && !metodoDito) method = 'credito';
+
 	if (cents === null) return { ok: false, reason: 'sem_valor' };
 	if (numeros > 1) return { ok: false, reason: 'valor_ambiguo' };
 	if (cents <= 0) return { ok: false, reason: 'sem_valor' };
@@ -160,6 +196,11 @@ export function parse(msg, { rules, hoje }) {
 	// errada mente sobre o mes, metodo errado mexe so na divisao entre 'sai da conta agora' e 'vai pra
 	// fatura'.
 	if (metodos > 1) return { ok: false, reason: 'metodo_ambiguo' };
+	// As parcelas entram depois de valor e data, e nao no meio: sem valor a mensagem nao e um gasto,
+	// sem parcela ela e.
+	if (parcelaRuim) return { ok: false, reason: 'parcelas_invalidas' };
+	if (vistasX > 1) return { ok: false, reason: 'parcelas_ambiguas' };
+	if (parcelas > 1 && method !== 'credito') return { ok: false, reason: 'parcelas_sem_credito' };
 
 	// Duas palavras da descricao podem ser regras. Ganha a mais usada:
 	let hit = null;
@@ -178,6 +219,11 @@ export function parse(msg, { rules, hoje }) {
 		// parser e confidence sao trilha de auditoria: gravados no insert e nunca lidos de volta pelo
 		// bot.
 		parser: 'regex',
-		confidence: hit && method ? 1 : hit ? 0.8 : 0.4,
+		// parcelas null quando nao ha parcelamento: o handle.js decide entre um insert e N pelo simples
+		// 'p.parcelas ?'.
+		parcelas: parcelas > 1 ? parcelas : null,
+		// metodoDito e nao method: confidence 1 significa "o usuario disse as duas coisas", e o credito
+		// deduzido do 'Nx' nao foi dito por ele.
+		confidence: hit && metodoDito ? 1 : hit ? 0.8 : 0.4,
 	};
 }
