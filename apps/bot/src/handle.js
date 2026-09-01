@@ -38,7 +38,34 @@ const FORMATO_DIA_SP = new Intl.DateTimeFormat('en-CA', {
 	day: '2-digit',
 });
 
-const hojeSP = () => FORMATO_DIA_SP.format(new Date());
+// Exportada porque o cron das contas fixas precisa do mesmo 'hoje' que uma mensagem usaria.
+/* Grava o valor de uma conta variavel, seja pela resposta a pergunta ou pelo '/fixo pagar'. Reserva
+   o mes se ainda nao estiver reservado. */
+async function pagarFixa(env, chatId, bill, ym, valor, hoje) {
+	await reservarMes(env, bill.id, ym, 'lancado');
+	const catId = bill.category_id ?? (await categoriaPorRegra(env, bill.name));
+	const iso = dataDaConta(bill.due_day, ym);
+	const row = await env.DB.prepare(
+		`insert into transactions (amount_cents, occurred_on, category_id, method, description, raw_message, parser, confidence)
+     values (?, ?, ?, ?, ?, ?, 'fixo', 1) returning id`,
+	)
+		.bind(valor, iso, catId, bill.method, bill.name, `fixo: ${bill.name}`)
+		.first();
+	await env.DB.prepare("update fixed_bill_posts set transaction_id = ?, state = 'lancado' where bill_id = ? and due_month = ?")
+		.bind(row.id, bill.id, ym)
+		.run();
+
+	const estado = await estadoDaCategoria(env, catId, ym);
+	await tg(env, 'sendMessage', {
+		chat_id: chatId,
+		text: corpo(valor, estado, bill.method, iso),
+		reply_markup: { inline_keyboard: teclado(row.id, catId, bill.method, []) },
+	});
+	const aviso = avisoEstouro(estado, valor, ym, hoje);
+	if (aviso) await tg(env, 'sendMessage', { chat_id: chatId, text: aviso });
+}
+
+export const hojeSP = () => FORMATO_DIA_SP.format(new Date());
 
 // Cada recusa do parser vira uma frase que repete o formato certo: a mensagem de erro e a unica
 // documentacao que o usuario le.
@@ -277,6 +304,117 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
+	// /fixo.
+	const mFixo = texto.match(/^[/]?fixo(?:[ ]+(.+))?$/i);
+	if (mFixo) {
+		const arg = mFixo[1]?.trim();
+		const ym = hoje.slice(0, 7);
+
+		if (!arg) {
+			await tg(env, 'sendMessage', {
+				chat_id: msg.chat.id,
+				text: bloco(linhasDasFixas(await listarFixas(env), ym)),
+				parse_mode: 'MarkdownV2',
+			});
+			return;
+		}
+
+		// Os verbos vem primeiro, senao '/fixo pausar netflix' cadastraria uma conta chamada 'pausar
+		// netflix'. Limite aceito:
+		const mVerbo = arg.match(/^(pagar|pular|pausar|voltar|remover)[ ]+(.+)$/i);
+		if (mVerbo) {
+			const verbo = norm(mVerbo[1]);
+			const resto = mVerbo[2].trim();
+
+			// '/fixo pagar luz 183,40' precisa de verbo proprio porque '/fixo luz 10' e ao mesmo tempo "dia
+			// 10" e "R$ 10,00".
+			if (verbo === 'pagar') {
+				const partes = resto.split(/[ ]+/);
+				const valor = centavos(partes.at(-1));
+				const nome = partes.slice(0, -1).join(' ');
+				const bill = nome && (await acharFixa(env, nome));
+				if (!bill) {
+					await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: `Não achei a conta fixa "${nome || resto}".` });
+					return;
+				}
+				if (valor === null || valor <= 0) {
+					await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: 'Formato: /fixo pagar luz 183,40' });
+					return;
+				}
+				await pagarFixa(env, msg.chat.id, bill, ym, valor, hoje);
+				return;
+			}
+
+			const bill = await acharFixa(env, resto);
+			if (!bill) {
+				const todas = await listarFixas(env);
+				await tg(env, 'sendMessage', {
+					chat_id: msg.chat.id,
+					text: `Não achei a conta fixa "${resto}".` + (todas.length ? ` Existem: ${todas.map((f) => f.name).join(', ')}` : ''),
+				});
+				return;
+			}
+
+			if (verbo === 'pular') {
+				await pularMes(env, bill.id, ym);
+				await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: `${bill.name} não conta neste mês.` });
+				return;
+			}
+			if (verbo === 'remover') {
+				await env.DB.prepare('delete from fixed_bills where id = ?').bind(bill.id).run();
+				await tg(env, 'sendMessage', {
+					chat_id: msg.chat.id,
+					text: `${bill.name} removida. Os lançamentos dos meses passados ficam.`,
+				});
+				return;
+			}
+			const pausar = verbo === 'pausar' ? 1 : 0;
+			await env.DB.prepare('update fixed_bills set paused = ? where id = ?').bind(pausar, bill.id).run();
+			await tg(env, 'sendMessage', {
+				chat_id: msg.chat.id,
+				text: pausar ? `${bill.name} pausada. /fixo voltar ${bill.name} quando quiser de volta.` : `${bill.name} de volta.`,
+			});
+			return;
+		}
+
+		// Cadastro.
+		const { nome, dia, valor, metodo } = lerFixo(arg);
+		if (!nome) {
+			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: 'Falta o nome. Formato: /fixo aluguel 5 1850 pix' });
+			return;
+		}
+		if (dia === null) {
+			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: 'Falta o dia. Formato: /fixo aluguel 5 1850 pix' });
+			return;
+		}
+		if (dia < 1 || dia > 31) {
+			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: 'Dia inválido. Use um dia de 1 a 31: /fixo aluguel 5 1850 pix' });
+			return;
+		}
+
+		const antes = await acharFixa(env, nome);
+		const catId = antes?.category_id ?? (await categoriaPorRegra(env, nome));
+		const bill = await salvarFixa(env, { nome, dia, valor, metodo, categoryId: catId });
+
+		const linhas = [
+			`Fixa ${antes ? 'atualizada' : 'criada'}: ${bill.name} · dia ${bill.due_day} · ${
+				bill.kind === 'variavel' ? 'valor variável' : `R$ ${brl(bill.amount_cents)}`
+			}${bill.method ? ` · ${rotulo(bill.method)}` : ''}`,
+		];
+		if (bill.kind === 'variavel') linhas.push(`Todo dia ${bill.due_day} eu pergunto quanto foi.`);
+		else linhas.push(`Lanço sozinho todo dia ${bill.due_day}. Não quer? /fixo pausar ${bill.name}`);
+
+		// Dia que ja passou neste mes: marca o mes como pulado pra o cron diario nao revisitar, e diz
+		// isso.
+		if (dia <= +hoje.slice(8, 10)) {
+			await pularMes(env, bill.id, ym);
+			linhas.push(`O dia ${bill.due_day} já passou neste mês, então começo no mês que vem.`);
+		}
+
+		await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: linhas.join('\n') });
+		return;
+	}
+
 	// Qualquer outra coisa comecando com barra cai na ajuda, inclusive o /start que o Telegram manda
 	// sozinho no primeiro contato.
 	if (texto.startsWith('/')) {
@@ -296,6 +434,12 @@ async function onMessage(msg, env, updateId) {
 				'Use /extrato para listar os lançamentos do mês, com o id de cada um.\n' +
 				'Use /revisar para acertar o que ficou sem categoria.\n' +
 				'Use /buscar <palavra> para somar o que gastou com algo.\n' +
+				'Contas que caem todo mês, use /fixo:\n' +
+				'  /fixo aluguel 5 1850 pix     (valor fixo, eu lanço sozinho)\n' +
+				'  /fixo conta de luz 10 debito (valor variável, eu pergunto)\n' +
+				'  /fixo pagar luz 183,40\n' +
+				'  /fixo pular luz              (não cobra este mês)\n' +
+				'  /fixo pausar netflix         e /fixo voltar netflix\n' +
 				'Use /editar <id> para corrigir um lançamento:\n' +
 				'  /editar 137 valor 89,90\n' +
 				'  /editar 137 data 12/08\n' +
@@ -305,6 +449,18 @@ async function onMessage(msg, env, updateId) {
 				'A barra é opcional em todos os comandos.',
 		});
 		return;
+	}
+
+	// Resposta a um pedido de valor de conta variavel. Precisa vir antes do parse:
+	const respondido = msg.reply_to_message?.message_id;
+	if (respondido && centavos(texto) !== null) {
+		const pend = await pendentePorMensagem(env, respondido);
+		if (pend) {
+			const bill = await acharFixa(env, pend.name);
+			// O mes e o da pergunta e nao o de hoje: resposta que chega em outubro pra a pergunta de
+			// setembro lanca em setembro, onde a conta de fato venceu.
+			if (bill) return pagarFixa(env, msg.chat.id, bill, pend.due_month, centavos(texto), hoje);
+		}
 	}
 
 	const p = parse(texto, { rules: await loadRules(env), hoje });

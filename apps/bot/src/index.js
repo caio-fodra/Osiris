@@ -1,4 +1,18 @@
-import { handle, chatDe, tg } from './handle.js';
+import { handle, chatDe, tg, hojeSP } from './handle.js';
+import {
+	fixasDeHoje,
+	reservarMes,
+	jaLancadaAMao,
+	lancarFixa,
+	pularMes,
+	marcarPergunta,
+	ultimoValor,
+	textoDaPergunta,
+	textoDoLancamento,
+	categoriaPorRegra,
+} from './fixos.js';
+import { estadoDaCategoria } from './orcamento.js';
+import { corpo, teclado } from './vista.js';
 
 export default {
 	async fetch(req, env, ctx) {
@@ -38,7 +52,14 @@ export default {
 	},
 
 	async scheduled(controller, env, ctx) {
-		ctx.waitUntil(backup(env).catch((e) => console.error('backup falhou', e)));
+		const tarefa = TAREFAS.get(controller.cron);
+		if (!tarefa) {
+			// Cron novo no wrangler.jsonc sem entrada no mapa. Grita no log:
+			console.error('cron sem tarefa', controller.cron);
+			return;
+		}
+		// Um waitUntil com catch proprio por tarefa. O Cloudflare NAO repete cron que falha:
+		ctx.waitUntil(tarefa(env).catch((e) => console.error('cron', controller.cron, e)));
 	},
 };
 
@@ -88,4 +109,73 @@ async function backup(env) {
 			text: `O backup semanal falhou (HTTP ${r.status}). O banco está intacto; é o envio que não foi.`,
 		}).catch((e) => console.error('aviso de falha de backup tambem falhou', e));
 	}
+}
+
+// As duas strings vem literalmente do "crons" em wrangler.jsonc. Se divergirem, o cron dispara e
+// cai no console.error do scheduled.
+const CRON_BACKUP = '0 12 * * 1';
+const CRON_FIXOS = '0 13 * * *';
+
+// Map e nao objeto literal: controller.cron e uma string que vem de fora, e num objeto literal a
+// chave 'constructor' acharia valor herdado do prototipo.
+const TAREFAS = new Map([
+	[CRON_BACKUP, backup],
+	[CRON_FIXOS, contasDoDia],
+]);
+
+/* O cron diario: as contas fixas que vencem hoje. */
+async function contasDoDia(env) {
+	const hoje = hojeSP();
+	const ym = hoje.slice(0, 7);
+	const fixas = await fixasDeHoje(env, hoje);
+
+	for (const b of fixas) {
+		try {
+			await umaFixa(env, b, ym);
+		} catch (e) {
+			console.error('fixa', b.id, b.name, e);
+		}
+	}
+}
+
+async function umaFixa(env, bill, ym) {
+	// Conta variavel: pergunta em vez de chutar.
+	if (bill.kind === 'variavel') {
+		if (!(await reservarMes(env, bill.id, ym, 'perguntado'))) return;
+		const ultimo = await ultimoValor(env, bill.id);
+		const r = await tg(env, 'sendMessage', {
+			chat_id: env.MY_CHAT_ID,
+			text: textoDaPergunta(bill, ultimo),
+			reply_markup: { force_reply: true },
+		});
+		// O message_id da pergunta e a chave que liga a resposta do usuario a esta conta. Sem ele a
+		// resposta seria um gasto solto, e o mes continuaria em aberto.
+		const j = await r.json().catch(() => null);
+		if (j?.result?.message_id) await marcarPergunta(env, bill.id, ym, j.result.message_id);
+		return;
+	}
+
+	// Conta de valor fixo: ja foi digitada a mao neste mes?
+	const jaTem = await jaLancadaAMao(env, bill, ym);
+	if (jaTem) {
+		await pularMes(env, bill.id, ym, jaTem.id);
+		await tg(env, 'sendMessage', {
+			chat_id: env.MY_CHAT_ID,
+			text: `${bill.name}: achei um lançamento igual neste mês (#${jaTem.id}), então não lancei de novo.`,
+		});
+		return;
+	}
+
+	if (!(await reservarMes(env, bill.id, ym, 'lancado'))) return;
+
+	const catId = bill.category_id ?? (await categoriaPorRegra(env, bill.name));
+	const { id, iso } = await lancarFixa(env, bill, ym, catId);
+	const estado = await estadoDaCategoria(env, catId, ym);
+
+	// Mesma confirmacao de um gasto digitado, com o teclado de sempre.
+	await tg(env, 'sendMessage', {
+		chat_id: env.MY_CHAT_ID,
+		text: corpo(bill.amount_cents, estado, bill.method, iso) + '\n' + textoDoLancamento(bill),
+		reply_markup: { inline_keyboard: teclado(id, catId, bill.method, []) },
+	});
 }

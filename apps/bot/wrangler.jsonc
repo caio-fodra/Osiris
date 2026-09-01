@@ -19,7 +19,9 @@
 		"MY_CHAT_ID": "<SEU_CHAT_ID>",
 	},
 	"triggers": {
-		"crons": ["0 12 * * 1"],
+		// Dois gatilhos, um handler. Quem escolhe e o controller.cron, que chega com a string exata que
+		// esta neste array.
+		"crons": ["0 12 * * 1", "0 13 * * *"],
 	},
 	// Porta fixa pros dois workers poderem rodar em dev ao mesmo tempo.
 	"dev": {
