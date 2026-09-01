@@ -3,6 +3,7 @@ import { brl, dia, bloco } from './fmt.js';
 import { relatorio, resolveMes } from './report.js';
 import { estadoDaCategoria, tabelaOrcamentos, avisoEstouro, linhasDoOrcamento, nomeDoMes } from './orcamento.js';
 import { corpo, resumo, teclado, emLinhas, ACAO, ACOES } from './vista.js';
+import { parcelasDe, linhaParcelas, somaMes, mesFatura, janelaFatura } from './fatura.js';
 import {
 	lerFixo,
 	salvarFixa,
@@ -647,9 +648,7 @@ async function onMessage(msg, env, updateId) {
 
 	// O valor da primeira linha continua sendo o TOTAL digitado, que e o que o usuario acabou de
 	// mandar.
-	const linhaParc = p.parcelas
-		? linhaParcelas(p.amount_cents, p.parcelas, mesFatura(p.occurred_on, await fechamentoDaFatura(env)), brl, nomeDoMes)
-		: null;
+	const linhaParc = p.parcelas ? linhaParcelas(p.amount_cents, p.parcelas, mesFatura(p.occurred_on, await fechamentoDaFatura(env))) : null;
 
 	await tg(env, 'sendMessage', {
 		chat_id: msg.chat.id,

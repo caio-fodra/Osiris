@@ -1,5 +1,8 @@
 /* Fatura de cartao e parcelamento. O report.js ja raciocinava sobre isso. */
 
+import { brl } from './fmt.js';
+import { nomeDoMes } from './orcamento.js';
+
 /* Aritmetica de mes sobre 'yyyy-MM', sem Date. */
 export function somaMes(ym, n) {
 	const a = +ym.slice(0, 4);
@@ -42,7 +45,7 @@ export function parcelasDe({ amount_cents, occurred_on, parcelas, fechamento }) 
 
 /* A segunda linha do resumo quando ha parcelamento. O valor da primeira linha continua sendo o
    total digitado, que e o que o usuario acabou de mandar. */
-export function linhaParcelas(total, parcelas, primeiroMes, brl, nomeDoMes) {
+export function linhaParcelas(total, parcelas, primeiroMes) {
 	const valores = dividir(total, parcelas);
 	const iguais = valores[0] === valores.at(-1);
 	const faixa = `${nomeDoMes(primeiroMes)} a ${nomeDoMes(somaMes(primeiroMes, parcelas - 1))}`;
