@@ -4,6 +4,18 @@ import { relatorio, resolveMes } from './report.js';
 import { estadoDaCategoria, tabelaOrcamentos, avisoEstouro, linhasDoOrcamento } from './orcamento.js';
 import { corpo, resumo, teclado, emLinhas, ACAO, ACOES } from './vista.js';
 import {
+	lerFixo,
+	salvarFixa,
+	acharFixa,
+	listarFixas,
+	linhasDasFixas,
+	pularMes,
+	pendentePorMensagem,
+	reservarMes,
+	categoriaPorRegra,
+	dataDaConta,
+} from './fixos.js';
+import {
 	extrato,
 	tecladoExtrato,
 	paraRevisar,
