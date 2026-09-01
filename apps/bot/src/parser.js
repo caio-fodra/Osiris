@@ -83,6 +83,22 @@ function ddmmParaIso(dia, mes, ano) {
 	return `${ano}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
 }
 
+/* Um token -> data, e o vocabulario DE data do projeto inteiro. Devolve {iso} quando entendeu,
+   {ruim:true} quando o token tem cara de data mas nao e uma data valida, e null quando nao e data
+   nenhuma (ai o token segue pra descricao). */
+export function lerData(tk, hoje) {
+	if (tk === 'ontem') return { iso: shiftDia(hoje, -1) };
+	if (tk === 'anteontem') return { iso: shiftDia(hoje, -2) };
+	const md = tk.match(RE_DATA);
+	if (!md) return null;
+	const ano = hoje.slice(0, 4);
+	const iso = (md[3] ?? ano) === ano ? ddmmParaIso(+md[1], +md[2], ano) : null;
+	return iso ? { iso } : { ruim: true };
+}
+
+/* Um token -> metodo canonico, ou null. O mapa METODOS e privado; isto e a porta. */
+export const metodoDe = (tk) => (isMetodo(tk) ? METODOS[tk] : null);
+
 /* Le uma mensagem solta e devolve a transacao pronta, ou o motivo da recusa. Formato: */
 export function parse(msg, { rules, hoje }) {
 	const tokens = preparado(msg).split(' ').filter(Boolean);
@@ -94,9 +110,6 @@ export function parse(msg, { rules, hoje }) {
 		datas = 0,
 		metodos = 0,
 		dataRuim = false;
-	// Uma leitura do ano por mensagem, do mesmo jeito que handle.js le o relogio uma vez so: dois
-	// tokens de data na mesma mensagem tem que ser julgados pelo mesmo ano.
-	const ANO = hoje.slice(0, 4);
 	const sobra = [];
 
 	for (const tk of tokens) {
@@ -114,27 +127,14 @@ export function parse(msg, { rules, hoje }) {
 		if (!rules.has(tk) && isMetodo(tk)) {
 			// Conta todo alias, mesmo com o metodo ja preenchido.
 			metodos++;
-			if (!method) method = METODOS[tk];
+			if (!method) method = metodoDe(tk);
 			continue;
 		}
 
-		if (tk === 'ontem') {
+		const ld = lerData(tk, hoje);
+		if (ld) {
 			datas++;
-			data = shiftDia(hoje, -1);
-			continue;
-		}
-		if (tk === 'anteontem') {
-			datas++;
-			data = shiftDia(hoje, -2);
-			continue;
-		}
-
-		const md = tk.match(RE_DATA);
-		if (md) {
-			datas++;
-			// Ano ausente cai no corrente, como sempre foi. Ano escrito tem que ser exatamente o corrente:
-			const iso = (md[3] ?? ANO) === ANO ? ddmmParaIso(+md[1], +md[2], ANO) : null;
-			if (iso) data = iso;
+			if (ld.iso) data = ld.iso;
 			else dataRuim = true;
 			continue;
 		}

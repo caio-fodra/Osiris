@@ -1,7 +1,20 @@
 import { parse, centavos, norm, LABEL, isMetodo, rotulo } from './parser.js';
 import { brl, dia, bloco } from './fmt.js';
 import { relatorio, resolveMes } from './report.js';
-import { estadoDaCategoria, tabelaOrcamentos, linhaEstado, avisoEstouro, linhasDoOrcamento } from './orcamento.js';
+import { estadoDaCategoria, tabelaOrcamentos, avisoEstouro, linhasDoOrcamento } from './orcamento.js';
+import { corpo, resumo, teclado, emLinhas, ACAO, ACOES } from './vista.js';
+import {
+	extrato,
+	tecladoExtrato,
+	paraRevisar,
+	buscar,
+	linhasDaBusca,
+	detalhe,
+	campoValido,
+	validarCampo,
+	aplicarEdicao,
+	CAMPOS_LISTA,
+} from './consulta.js';
 
 const API = (t) => `https://api.telegram.org/bot${t}`;
 
@@ -29,6 +42,8 @@ const hojeSP = () => FORMATO_DIA_SP.format(new Date());
 
 // Cada recusa do parser vira uma frase que repete o formato certo: a mensagem de erro e a unica
 // documentacao que o usuario le.
+const AJUDA_EDITAR = '\nExemplo: /editar 137 valor 89,90';
+
 const ERRO = {
 	sem_valor: 'Não achei o valor. Formato: 120 mercado 12/08 credito',
 	valor_ambiguo: 'Achei mais de um número. Manda só o valor: 120 mercado 12/08 credito',
@@ -59,13 +74,6 @@ async function categoriasPorUso(env) {
 	return results;
 }
 
-// Quebra a lista em linhas de no maximo dois botoes.
-export function emLinhas(botoes, porLinha = 2) {
-	const linhas = [];
-	for (let i = 0; i < botoes.length; i += porLinha) linhas.push(botoes.slice(i, i + porLinha));
-	return linhas;
-}
-
 /* As duas unicas funcoes que tocam a chave de categoria, e a razao de existirem: a migration 0004
    fez de name_norm a chave real, mas nenhum CHECK pode garantir que ela esteja normalizada. */
 async function criarCategoria(env, nome) {
@@ -88,45 +96,6 @@ function keywordDe(desc) {
 		.split(/\s+/)
 		.filter((w) => w.length > 2 && ePalavra(w) && !isMetodo(w))
 		.sort((a, b) => b.length - a.length)[0];
-}
-
-// Uma linha so, igual na confirmacao e depois de cada botao, pra o usuario ver sempre o estado
-// atual da transacao.
-/* A confirmacao inteira: o resumo de sempre, mais a linha de orcamento quando ha o que dizer. */
-const corpo = (cents, estado, method, iso) => [resumo(cents, estado?.nome, method, iso), linhaEstado(estado)].filter(Boolean).join('\n');
-
-function resumo(cents, catNome, method, iso) {
-	return `R$ ${brl(cents)} · ${catNome ?? 'sem categoria'}` + ` · ${rotulo(method) ?? 'sem método'} · ${dia(iso)}`;
-}
-
-/* O vocabulario de acao de botao, em UM lugar. teclado() produz, onCallback valida e o teste
-   confere. */
-export const ACAO = { CAT: 'cat', PAY: 'pay', DEL: 'del' };
-
-// Set e nao objeto literal: a acao vem de fora e num objeto literal 'constructor' acharia valor
-// herdado do prototipo.
-export const ACOES = new Set(Object.values(ACAO));
-
-/* Monta o teclado com o que ainda falta preencher na transacao. Recebe o estado ja lido em vez de
-   ler do banco de novo: */
-export function teclado(txId, temCategoria, temMetodo, cats = []) {
-	const linhas = [];
-	if (!temCategoria) {
-		linhas.push(...emLinhas(cats.map((c) => ({ text: c.name, callback_data: `${ACAO.CAT}:${txId}:${c.id}` }))));
-	}
-	if (!temMetodo) {
-		// Passa pelo mesmo emLinhas das categorias, com porLinha=4. Saida byte a byte identica hoje (sao
-		// exatamente quatro metodos), mas um quinto metodo passa a quebrar linha em vez de esparramar
-		// numa fileira de cinco ao lado de fileiras de dois.
-		linhas.push(
-			...emLinhas(
-				Object.keys(LABEL).map((m) => ({ text: LABEL[m], callback_data: `${ACAO.PAY}:${txId}:${m}` })),
-				4,
-			),
-		);
-	}
-	linhas.push([{ text: 'apagar', callback_data: `${ACAO.DEL}:${txId}:` }]);
-	return linhas.filter((l) => l.length);
 }
 
 async function onMessage(msg, env, updateId) {
@@ -235,6 +204,79 @@ async function onMessage(msg, env, updateId) {
 		return;
 	}
 
+	// /extrato [mes].
+	const mExt = texto.match(/^[/]?extrato(?:[ ]+(.+))?$/i);
+	if (mExt) {
+		const ym = resolveMes(mExt[1] ?? '', hoje);
+		const { texto: t, paginas } = await extrato(env, ym, 0);
+		await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: t, parse_mode: 'MarkdownV2', reply_markup: tecladoExtrato(ym, 0, paginas) });
+		return;
+	}
+
+	// /revisar.
+	if (/^[/]?revisar$/i.test(texto)) {
+		const { fila, total } = await paraRevisar(env);
+		if (!total) {
+			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: 'Nada para revisar.' });
+			return;
+		}
+		await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: `Revisar · ${total} ${total === 1 ? 'pendência' : 'pendências'}` });
+		const cats = await categoriasPorUso(env);
+		for (const tx of fila) {
+			const d = await detalhe(env, tx, cats);
+			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: d.texto, reply_markup: d.reply_markup });
+		}
+		return;
+	}
+
+	// /buscar <termo>.
+	const mBusca = texto.match(/^[/]?busca[r]?[ ]+(.+)$/i);
+	if (mBusca) {
+		const termo = mBusca[1].trim();
+		const achados = await buscar(env, termo);
+		await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: bloco(linhasDaBusca(termo, achados)), parse_mode: 'MarkdownV2' });
+		return;
+	}
+
+	// /editar <id> [campo] [valor].
+	const mEd = texto.match(/^[/]?editar[ ]+(\d+)(?:[ ]+([^ ]+)(?:[ ]+(.+))?)?$/i);
+	if (mEd) {
+		const id = Number(mEd[1]);
+		const tx = await env.DB.prepare('select * from transactions where id = ?').bind(id).first();
+		if (!tx) {
+			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: `Não achei o lançamento #${id}. Veja os ids no /extrato.` });
+			return;
+		}
+
+		// Sem campo: mostra o lancamento com os botoes.
+		if (!mEd[2]) {
+			const cats = tx.category_id ? [] : await categoriasPorUso(env);
+			const d = await detalhe(env, tx, cats);
+			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: d.texto, reply_markup: d.reply_markup });
+			return;
+		}
+
+		const campo = campoValido(mEd[2]);
+		if (!campo || !mEd[3]) {
+			await tg(env, 'sendMessage', {
+				chat_id: msg.chat.id,
+				text: `Campo inválido. Use: ${CAMPOS_LISTA}.` + AJUDA_EDITAR,
+			});
+			return;
+		}
+
+		const novo = await validarCampo(env, campo, mEd[3].trim(), hoje);
+		if (novo.erro) {
+			await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: novo.erro });
+			return;
+		}
+
+		const r = await aplicarEdicao(env, tx, campo, novo, hoje);
+		await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: r.texto });
+		if (r.aviso) await tg(env, 'sendMessage', { chat_id: msg.chat.id, text: r.aviso });
+		return;
+	}
+
 	// Qualquer outra coisa comecando com barra cai na ajuda, inclusive o /start que o Telegram manda
 	// sozinho no primeiro contato.
 	if (texto.startsWith('/')) {
@@ -250,7 +292,17 @@ async function onMessage(msg, env, updateId) {
 				'Para listar categorias use /categorias\n' +
 				'Para definir um teto mensal use /orcamento <categoria> <valor>\n' +
 				'Use /orcamento sozinho para ver gasto x teto de cada categoria.\n' +
-				'Use /relatorio para ver o resumo do mês.',
+				'Use /relatorio para ver o resumo do mês.\n' +
+				'Use /extrato para listar os lançamentos do mês, com o id de cada um.\n' +
+				'Use /revisar para acertar o que ficou sem categoria.\n' +
+				'Use /buscar <palavra> para somar o que gastou com algo.\n' +
+				'Use /editar <id> para corrigir um lançamento:\n' +
+				'  /editar 137 valor 89,90\n' +
+				'  /editar 137 data 12/08\n' +
+				'  /editar 137 descricao padaria da esquina\n' +
+				'  /editar 137 categoria mercado\n' +
+				'  /editar 137 metodo pix\n' +
+				'A barra é opcional em todos os comandos.',
 		});
 		return;
 	}
@@ -312,8 +364,27 @@ async function onCallback(cb, env) {
 	// arquivo. Um 'foo:42:x' passava pela busca da transacao, nao casava com ramo nenhum, e ainda
 	// assim caia no ack('ok') + editMessageText do fim:
 	const partes = (cb.data ?? '').split(':');
+	if (partes.length !== 3) return ack('acao invalida');
+
+	// Paginacao do extrato, tratada antes de tudo: ela nao fala de transacao nenhuma, entao o segundo
+	// campo e o mes e nao um id.
+	if (partes[0] === ACAO.EXT) {
+		const [, ym, pag] = partes;
+		if (!/^\d{4}-\d{2}$/.test(ym)) return ack('acao invalida');
+		const pagina = Math.max(0, Number(pag) || 0);
+		const { texto, paginas } = await extrato(env, ym, pagina);
+		await ack('ok');
+		return tg(env, 'editMessageText', {
+			chat_id: cb.message.chat.id,
+			message_id: cb.message.message_id,
+			text: texto,
+			parse_mode: 'MarkdownV2',
+			reply_markup: tecladoExtrato(ym, pagina, paginas),
+		});
+	}
+
 	const txId = Number(partes[1]);
-	if (partes.length !== 3 || !ACOES.has(partes[0]) || !Number.isInteger(txId)) return ack('acao invalida');
+	if (!ACOES.has(partes[0]) || !Number.isInteger(txId)) return ack('acao invalida');
 	const [acao, , valor] = partes;
 
 	const tx = await env.DB.prepare('select * from transactions where id = ?').bind(txId).first();
