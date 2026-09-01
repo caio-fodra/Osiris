@@ -5,8 +5,9 @@
 	"compatibility_date": "2026-08-25",
 	"observability": { "enabled": true },
 	"upload_source_maps": true,
-	// O banco e um so, compartilhado com o dashboard em apps/web, entao migrations/ mora na raiz do
-	// repo e nao aqui dentro. O wrangler resolve migrations_dir relativo a este arquivo, dai o ../../.
+
+	// Banco compartilhado com apps/web, entao migrations/ mora na raiz. O wrangler resolve
+	// migrations_dir relativo a este arquivo.
 	"d1_databases": [
 		{
 			"binding": "DB",
@@ -15,17 +16,20 @@
 			"migrations_dir": "../../migrations",
 		},
 	],
-	// MY_CHAT_ID saiu do "vars" e virou secret: este arquivo e publico, e um chat id aqui dentro e o
-	// dono do bot identificado em texto puro pra sempre.
+
+	// So os nomes; o valor vai por `wrangler secret put`. O deploy recusa subir se faltar um
+	// ("The following required secrets have not been set"). Cuidado: com "secrets" declarado
+	// o wrangler injeta do .dev.vars apenas as chaves desta lista, e nao avisa do que ficou.
 	"secrets": {
 		"required": ["TELEGRAM_TOKEN", "TG_SECRET", "MY_CHAT_ID"],
 	},
+
 	"triggers": {
-		// Dois gatilhos, um handler. Quem escolhe e o controller.cron, que chega com a string exata que
-		// esta neste array.
-		"crons": ["0 12 * * 1", "0 13 * * *"],
+		// UTC-3 fixo desde 2019, entao 13:00 UTC = 10:00 em SP.
+		"crons": ["0 13 * * *"],
 	},
-	// Porta fixa pros dois workers poderem rodar em dev ao mesmo tempo.
+
+	// 8788 e do web; assim da pra rodar os dois `dev` juntos.
 	"dev": {
 		"port": 8787,
 	},
