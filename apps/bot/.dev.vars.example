@@ -1,0 +1,11 @@
+# Copie para apps/bot/.dev.vars e preencha. Em producao nenhum dos tres mora em arquivo:
+# sao secrets do Cloudflare.
+#   npx wrangler secret put <NOME> -c apps/bot/wrangler.jsonc
+#   npx wrangler secret list -c apps/bot/wrangler.jsonc
+
+# do @BotFather
+TELEGRAM_TOKEN=
+# o mesmo valor passado no setWebhook, em secret_token
+TG_SECRET=
+# o id numerico do seu chat com o bot, a segunda trava do webhook
+MY_CHAT_ID=

@@ -14,6 +14,15 @@ import {
 import { estadoDaCategoria } from './orcamento.js';
 import { corpo, teclado } from './vista.js';
 
+// Os tres segredos do bot. A lista canonica e o "secrets.required" do wrangler.jsonc, que e quem
+// faz o deploy recusar quando falta um; esta aqui e a segunda rede, pro caso que aquela nao cobre.
+const SEGREDOS = ['TELEGRAM_TOKEN', 'TG_SECRET', 'MY_CHAT_ID'];
+const faltando = (env) => SEGREDOS.filter((k) => !env[k]);
+
+// Uma mensagem so, com o comando junto: quem le isso no log as 10 da manha quer consertar, nao
+// investigar.
+const FALTA_CHAT_ID = 'MY_CHAT_ID ausente. Rode: wrangler secret put MY_CHAT_ID -c apps/bot/wrangler.jsonc';
+
 export default {
 	async fetch(req, env, ctx) {
 		const url = new URL(req.url);
@@ -38,6 +47,19 @@ export default {
 				console.log('update sem chat:', Object.keys(upd).join(','));
 				return new Response('ok');
 			}
+			// MY_CHAT_ID e SECRET desde 2026-09-01, entao ela pode simplesmente NAO existir. Sem
+			// esta linha o !== abaixo seria sempre verdadeiro e TODA mensagem sairia por ele com
+			// 200 -- indistinguivel, no log, do chat de terceiro que a linha seguinte descarta de
+			// proposito. O 200 fica: 5xx faria o Telegram reenviar em loop, e o problema nao esta
+			// no update, esta na configuracao. O que muda e que agora o descarte GRITA, e o
+			// /health la embaixo passa a reprovar.
+			//
+			// `!` e nao `=== undefined`: .dev.vars.example copiado e nao preenchido entrega string
+			// vazia, que e o mesmo estrago. Chat id do Telegram nunca e 0.
+			if (!env.MY_CHAT_ID) {
+				console.error(FALTA_CHAT_ID);
+				return new Response('ok');
+			}
 			if (String(chatId) !== env.MY_CHAT_ID) return new Response('ok');
 
 			// Responde 200 na hora e processa em segundo plano, pra nao arriscar o timeout do webhook. O
@@ -46,12 +68,23 @@ export default {
 			return new Response('ok');
 		}
 
-		if (url.pathname === '/health') return new Response('ok');
+		// /health e o comando que o readme manda rodar depois de todo deploy. Ele passa a cobrir tambem a
+		// configuracao:
+		if (url.pathname === '/health') {
+			const falta = faltando(env);
+			return falta.length ? new Response(`faltando: ${falta.join(', ')}`, { status: 500 }) : new Response('ok');
+		}
 
 		return new Response('not found', { status: 404 });
 	},
 
 	async scheduled(controller, env, ctx) {
+		// Sem destinatario o cron nao roda.
+		if (!env.MY_CHAT_ID) {
+			console.error(FALTA_CHAT_ID, '-- cron', controller.cron, 'nao rodou');
+			return;
+		}
+
 		const tarefa = TAREFAS.get(controller.cron);
 		if (!tarefa) {
 			// Cron novo no wrangler.jsonc sem entrada no mapa. Grita no log:

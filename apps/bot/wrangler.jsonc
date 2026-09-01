@@ -15,8 +15,10 @@
 			"migrations_dir": "../../migrations",
 		},
 	],
-	"vars": {
-		"MY_CHAT_ID": "<SEU_CHAT_ID>",
+	// MY_CHAT_ID saiu do "vars" e virou secret: este arquivo e publico, e um chat id aqui dentro e o
+	// dono do bot identificado em texto puro pra sempre.
+	"secrets": {
+		"required": ["TELEGRAM_TOKEN", "TG_SECRET", "MY_CHAT_ID"],
 	},
 	"triggers": {
 		// Dois gatilhos, um handler. Quem escolhe e o controller.cron, que chega com a string exata que
