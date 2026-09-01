@@ -13,15 +13,11 @@
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote -c apps/bot/wrangler.jsonc",
     "db:migrate:list": "wrangler d1 migrations list DB --remote -c apps/bot/wrangler.jsonc",
     "backup": "wrangler d1 export DB --remote --output osiris-backup.sql -c apps/bot/wrangler.jsonc",
-    "restore": "node scripts/restore.mjs",
     "prepare": "git config core.hooksPath .githooks || exit 0",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "prettier": "^3.9.6",
     "vitest": "^4.1.11",
     "wrangler": "^4.127.1"
   }

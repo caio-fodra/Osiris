@@ -1,19 +1,16 @@
-/* Apresentacao: como uma transacao aparece no chat. */
+// Como uma transacao aparece no chat. Nao toca banco.
+// Importa fmt/parser/orcamento; nunca handle.js, que importa daqui.
 
 import { brl, dia } from './fmt.js';
 import { LABEL, rotulo } from './parser.js';
 import { linhaEstado } from './orcamento.js';
 
-// Quebra a lista em linhas de no maximo dois botoes.
-export function emLinhas(botoes, porLinha = 2) {
+function emLinhas(botoes, porLinha = 2) {
 	const linhas = [];
 	for (let i = 0; i < botoes.length; i += porLinha) linhas.push(botoes.slice(i, i + porLinha));
 	return linhas;
 }
 
-// Uma linha so, igual na confirmacao e depois de cada botao, pra o usuario ver sempre o estado
-// atual da transacao.
-/* A confirmacao inteira: o resumo de sempre, mais a linha de orcamento quando ha o que dizer. */
 export const corpo = (cents, estado, method, iso) =>
 	[resumo(cents, estado?.nome, method, iso), linhaEstado(estado)].filter(Boolean).join('\n');
 
@@ -21,25 +18,22 @@ export function resumo(cents, catNome, method, iso) {
 	return `R$ ${brl(cents)} · ${catNome ?? 'sem categoria'}` + ` · ${rotulo(method) ?? 'sem método'} · ${dia(iso)}`;
 }
 
-/* O vocabulario de acao de botao, em UM lugar. teclado() produz, onCallback valida e o teste
-   confere. */
+// Unico lugar que define os verbos de callback_data.
 export const ACAO = { CAT: 'cat', PAY: 'pay', DEL: 'del', EXT: 'ext' };
 
-// Set e nao objeto literal: a acao vem de fora e num objeto literal 'constructor' acharia valor
-// herdado do prototipo.
+// So as acoes que falam de uma transacao so: nelas o segundo campo do callback_data e
+// um id. O 'ext' carrega o mes e e tratado antes. Set pelo motivo do hasOwn em parser.js.
 export const ACOES = new Set([ACAO.CAT, ACAO.PAY, ACAO.DEL]);
 
-/* Monta o teclado com o que ainda falta preencher na transacao. Recebe o estado ja lido em vez de
-   ler do banco de novo: */
+// Recebe o estado ja lido, entao onMessage e onCallback chegam ao mesmo teclado.
+// 'apagar' entra sempre, e a unica forma de desfazer. O filter no fim e rede: o Telegram
+// recusa inline_keyboard com linha vazia e a mensagem inteira falha com 400.
 export function teclado(txId, temCategoria, temMetodo, cats = []) {
 	const linhas = [];
 	if (!temCategoria) {
 		linhas.push(...emLinhas(cats.map((c) => ({ text: c.name, callback_data: `${ACAO.CAT}:${txId}:${c.id}` }))));
 	}
 	if (!temMetodo) {
-		// Passa pelo mesmo emLinhas das categorias, com porLinha=4. Saida byte a byte identica hoje (sao
-		// exatamente quatro metodos), mas um quinto metodo passa a quebrar linha em vez de esparramar
-		// numa fileira de cinco ao lado de fileiras de dois.
 		linhas.push(
 			...emLinhas(
 				Object.keys(LABEL).map((m) => ({ text: LABEL[m], callback_data: `${ACAO.PAY}:${txId}:${m}` })),

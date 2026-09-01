@@ -4,13 +4,13 @@
 	"main": "src/index.js",
 	"compatibility_date": "2026-08-28",
 
-	// Mesmas duas chaves do bot. O catch de /api/* faz `console.error('erro em', ...)` de propósito.
+	// O catch de /api/* loga a mensagem real do D1; sem observability esse log nao e retido.
 	"observability": { "enabled": true },
 	"upload_source_maps": true,
 
-	// Explícitos, e não pelo default, porque o default escondia superfície de rede: sem estas duas
-	// linhas ninguém lendo este arquivo descobre que existe uma URL pública, nem que `preview_urls`
-	// segue o `workers_dev`.
+	// Explicitos porque o default esconde superficie de rede: preview_urls segue o
+	// workers_dev, entao cada version upload ganha a sua URL publica. Quem protege isto e o
+	// Access, que nao tem chave de wrangler e vive no painel (Workers & Pages > osiris-web).
 	"workers_dev": true,
 	"preview_urls": true,
 
@@ -19,8 +19,7 @@
 		"binding": "ASSETS",
 	},
 
-	// Mesmo banco do bot (apps/bot) e a mesma pasta de migrations, na raiz do repo: existe uma cópia
-	// só do schema para os dois workers.
+	// Mesmo banco e mesmas migrations do apps/bot.
 	"d1_databases": [
 		{
 			"binding": "DB",
@@ -30,7 +29,6 @@
 		},
 	],
 
-	// 8787 é do bot; assim dá para rodar os dois `dev` ao mesmo tempo.
 	"dev": {
 		"port": 8788,
 	},
