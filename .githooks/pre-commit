@@ -1,0 +1,57 @@
+#!/bin/sh
+# Ultima rede antes de um segredo entrar no historico. Le o INDEX, nao o disco: e o que o
+# commit vai carregar que importa.
+#
+# Instalado pelo "prepare" do package.json (core.hooksPath). Escape: git commit --no-verify.
+
+fim=0
+
+barra() {
+	echo "pre-commit: $1" >&2
+	echo "            $2" >&2
+	fim=1
+}
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+if [ -z "$staged" ]; then
+	exit 0
+fi
+
+# 1. Segredo de dev e dado do banco, por nome. Quem chega aqui chegou por `git add -f` ou
+#    por uma regra do .gitignore que parou de casar.
+for f in $staged; do   # TODO: quebra em caminho com espaco no nome
+	case "$f" in
+	*.dev.vars.example | *.env.example) ;;
+	*.dev.vars | *.dev.vars.* | .env | .env.*) barra "$f" "segredo de dev. So o .example entra." ;;
+	migrations/*.sql) ;;
+	*.sql) barra "$f" "o unico .sql versionado deste repo esta em migrations/." ;;
+	osiris-*.json) barra "$f" "e o nome do backup semanal: historico financeiro." ;;
+	esac
+done
+
+# 2. Dump do banco por conteudo, pq o nome nao e garantia: um backup renomeado pra
+#    dados.json passa pelo .gitignore e pelo caso acima. As tres chaves nao aparecem em
+#    nenhum JSON legitimo daqui, package-lock incluso.
+for f in $(git diff --cached --name-only --diff-filter=ACMR -- '*.json'); do
+	if git show ":$f" | grep -qE '"(gerado_em|amount_cents|raw_message)"'; then
+		barra "$f" "tem cara de dump do banco (gerado_em/amount_cents/raw_message)."
+	fi
+done
+
+# 3. Token de bot do Telegram em linha adicionada. Forma fixa: digitos, dois pontos, AA.
+if git diff --cached -U0 | grep -qE '^\+.*[0-9]{8,10}:AA[A-Za-z0-9_-]{30,}'; then
+	barra "o diff" "tem algo com a forma de um token de bot do Telegram."
+fi
+
+# 4. MY_CHAT_ID de volta pro config. No wrangler.jsonc o nome so pode aparecer dentro de
+#    secrets.required, que nao carrega valor. O hook nao guarda o numero.
+if git diff --cached -U0 -- '*wrangler.jsonc' | grep -qE '^\+.*"MY_CHAT_ID"[[:space:]]*:'; then
+	barra "wrangler.jsonc" "MY_CHAT_ID com valor no config. E secret: use .dev.vars ou secret put."
+fi
+
+if [ "$fim" != 0 ]; then
+	echo "" >&2
+	echo "Nada foi commitado. Se for falso positivo: git commit --no-verify" >&2
+	exit 1
+fi
+exit 0

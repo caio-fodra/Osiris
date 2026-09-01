@@ -175,6 +175,15 @@ dist
 # backup do D1: e o historico financeiro, nunca vai pro repo
 osiris-backup.sql
 *-backup.sql
+# ...e o backup SEMANAL, que chega do Telegram com este nome exato (o sendDocument do
+# apps/bot/src/index.js monta `osiris-${data}.json`). O caminho normal de uma restauracao
+# e baixar esse arquivo pra ca e rodar `npm run restore -- osiris-2026-09-01.json`, entao
+# ele passa por este diretorio justamente no dia em que ninguem esta com cabeca pra
+# reparar num `git add -A`. Nao estava coberto por nada ate 2026-09-01.
+osiris-*.json
 
-# ajustes locais do Claude Code: sao por maquina, nao por repo
-.claude/settings.local.json
+# ajustes locais do Claude Code: sao por maquina, nao por repo. A PASTA inteira, e nao so
+# o settings.local.json: hoje ele e o unico arquivo la, mas qualquer settings.json,
+# agents/ ou hooks/ que aparecesse entraria num `git add -A` sem ninguem notar. Se um dia
+# algo la dentro merecer ser versionado, entra por negacao explicita aqui.
+.claude/
