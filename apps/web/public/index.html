@@ -16,11 +16,11 @@
 		<style>
 			/* ==========================================================================
    SISTEMA
-   Todo valor de espaço, cor, tipo, raio e tempo vive aqui. Nada abaixo
-   desta seção usa número solto.
+   Todo valor de espaco, cor, tipo, raio e tempo vive aqui. Nada abaixo
+   desta secao usa numero solto.
    ========================================================================== */
 			:root {
-				/* Espaço. */
+				/* Espaco: base 4, escala 4/8/12/16/24/32/48/64 */
 				--s-1: 4px;
 				--s-2: 8px;
 				--s-3: 12px;
@@ -30,18 +30,25 @@
 				--s-7: 48px;
 				--s-8: 64px;
 
-				/* Cor. */
+				/* Cor: papel de formulario continuo, tinta beringela
+     O malva vive so no papel e nas listras. Dado e sempre tinta cheia. */
 				--c-paper: #e3dce4; /* fundo da janela        */
 				--c-sheet: #efeaef; /* folha                  */
 				--c-bar: #e2dae3; /* listra do papel        */
 				--c-rule: #c4b8c6; /* pauta / borda          */
 				--c-ink: #241c26; /* texto principal        */
-				--c-muted: #635769; /* texto secundário       */
-				--c-mark: #26605c; /* foco, série principal  */
+				--c-muted: #635769; /* texto secundario       */
+				--c-mark: #26605c; /* foco, serie principal  */
 				--c-up: #a8322f; /* gasto subiu            */
 				--c-down: #4f7a3f; /* gasto caiu             */
 
-				/* Série categórica. */
+				/* Serie categorica: identidade de categoria na rosca.
+     Oito casas fixas, atribuidas em ordem e nunca cicladas: da nona categoria
+     em diante o resto vira uma fatia "Outras" em cinza, porque repetir cor e
+     mentir sobre identidade. Validada sobre a folha (#EFEAEF): contraste
+     >= 3:1 em todas as oito, pior vizinhanca ΔE 10.9 sob protanopia e
+     deuteranopia (minimo 8) e 19.4 em visao normal (minimo 15).
+     Se mexer aqui, revalide: nao confie no olho. */
 				--c-serie-1: #0a8a70; /* teal     */
 				--c-serie-2: #c1521f; /* laranja  */
 				--c-serie-3: #3d74c9; /* azul     */
@@ -52,23 +59,23 @@
 				--c-serie-8: #c0392e; /* vermelho */
 				--c-serie-outras: #7e7484;
 
-				/* Tipo. */
-				--t-micro: 11px; /* rótulos em caixa alta   */
-				--t-data: 13px; /* números e tabela        */
+				/* Tipo: escala fixa de 5 degraus, razao ~1.28 */
+				--t-micro: 11px; /* rotulos em caixa alta   */
+				--t-data: 13px; /* numeros e tabela        */
 				--t-body: 15px; /* prosa                   */
-				--t-lead: 19px; /* título da folha         */
+				--t-lead: 19px; /* titulo da folha         */
 				--t-display: clamp(34px, 6.5vw, 54px);
 
-				/* Peso. */
+				/* Peso: tres, so */
 				--w-normal: 400;
 				--w-medium: 500;
 				--w-bold: 600;
 
-				/* Entrelinha. */
+				/* Entrelinha: duas */
 				--lh-tight: 1.2;
 				--lh-base: 1.55;
 
-				/* Raio. */
+				/* Raio: dois */
 				--r-sm: 2px;
 				--r-md: 4px;
 
@@ -106,7 +113,7 @@
 				outline-offset: 2px;
 			}
 
-			/* A folha ocupa a janela inteira. O formulario continuo nao tem largura de coluna fixa: */
+			/* A folha ocupa a janela inteira: quem limita a leitura e a grade interna. */
 			.sheet {
 				position: relative;
 				padding: 0 var(--s-7) var(--s-8);
@@ -115,7 +122,7 @@
 				border-left: 1px solid var(--c-rule);
 				border-right: 1px solid var(--c-rule);
 			}
-			/* Trilho perfurado do formulário contínuo. É a única marca decorativa. */
+			/* Trilho perfurado do formulario continuo. E a unica marca decorativa. */
 			.sheet::before,
 			.sheet::after {
 				content: '';
@@ -135,7 +142,7 @@
 			}
 
 			/* ==========================================================================
-   CABEÇALHO
+   CABECALHO
    ========================================================================== */
 			.head {
 				position: sticky;
@@ -220,8 +227,8 @@
 				opacity: 0.32;
 			}
 
-			/* Barra de progresso indeterminada, ancorada na régua do cabeçalho. Só aparece enquanto há
-			   requisição em voo. */
+			/* Barra de progresso indeterminada, ancorada na regua do cabecalho.
+   So aparece enquanto ha requisicao em voo. */
 			.progress {
 				position: absolute;
 				left: 0;
@@ -297,15 +304,15 @@
 			}
 
 			/* ==========================================================================
-   SEÇÕES
+   SECOES
    ========================================================================== */
 			.grid {
 				display: grid;
 				grid-template-columns: 1fr 1fr;
 				gap: 0 var(--s-7);
 			}
-			/* Ocupa a linha inteira enquanto a grade tem duas colunas. Em tela larga vira a terceira coluna
-			   (ver ADAPTACOES). */
+			/* Ocupa a linha inteira enquanto a grade tem duas colunas. Em tela larga vira
+   a terceira coluna (ver ADAPTACOES). */
 			.panel--wide {
 				grid-column: 1 / -1;
 			}
@@ -434,7 +441,7 @@
 
 			/* ==========================================================================
    SKELETON
-   O esqueleto reproduz a própria pauta do papel: linhas listradas vazias.
+   O esqueleto reproduz a propria pauta do papel: linhas listradas vazias.
    ========================================================================== */
 			.skel {
 				background: var(--c-bar);
@@ -472,9 +479,9 @@
 			}
 
 			/* ==========================================================================
-   REVELAÇÃO ESCALONADA
-   Os blocos entram na ordem de leitura, 60ms entre um e outro. Só na
-   primeira carga; trocar de mês reusa o esqueleto, não repete a entrada.
+   REVELACAO ESCALONADA
+   Os blocos entram na ordem de leitura, 60ms entre um e outro. So na
+   primeira carga; trocar de mes reusa o esqueleto, nao repete a entrada.
    ========================================================================== */
 			.reveal {
 				opacity: 0;
@@ -511,7 +518,7 @@
 			}
 
 			/* ==========================================================================
-   ADAPTAÇÕES
+   ADAPTACOES
    ========================================================================== */
 			@media (max-width: 820px) {
 				.sheet {
@@ -530,8 +537,8 @@
 				}
 			}
 
-			/* Acima disso a terceira coluna cabe sem espremer nenhum dos tres graficos, e os tres paineis do
-			   mes ficam visiveis de uma vez, sem rolagem. */
+			/* Acima disso a terceira coluna cabe sem espremer nenhum dos tres graficos,
+   e os tres paineis do mes ficam visiveis de uma vez, sem rolagem. */
 			@media (min-width: 1500px) {
 				.grid {
 					grid-template-columns: 1fr 1fr 1fr;
@@ -539,8 +546,10 @@
 				.panel--wide {
 					grid-column: auto;
 				}
-				/* A coluna do donut e a mais alta, porque leva a lista de categorias embaixo. Sem isso as
-				   outras duas ficariam com um vao morto sob o grafico ate a linha de baixo. */
+				/* A coluna do donut e a mais alta, porque leva a lista de categorias embaixo.
+     Sem isso as outras duas ficariam com um vao morto sob o grafico ate a linha
+     de baixo. O painel vira coluna flexivel e o grafico cresce para ocupar a
+     altura da fileira; no painel mais alto nao sobra folga, entao ele nao mexe. */
 				.panel {
 					display: flex;
 					flex-direction: column;
@@ -615,8 +624,10 @@
 			<p class="msg" id="msg" hidden></p>
 		</main>
 
-		<!-- Versao exata e nao '@4': com a faixa flutuante, o jsdelivr entrega o que for a ultima 4.x no
-		   dia, e a pagina que desenha o extrato inteiro passa a rodar codigo que ninguem reviu. -->
+		<!-- Versao fixa: com '@4' o jsdelivr entrega a ultima 4.x do dia, e o integrity so
+		     existe sobre bytes conhecidos. Sem crossorigin o navegador barra script
+		     cross-origin com integrity. Pra trocar de versao, recalcule o hash:
+		     curl -sL <url> | openssl dgst -sha384 -binary | openssl base64 -A -->
 		<script
 			src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
 			integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
@@ -626,8 +637,9 @@
 			(function () {
 				'use strict';
 
-				/* ---- tokens lidos do CSS ------------------------------------------ Nada de cor, tipo ou
-				   tempo é redigitado aqui: tudo sai do :root lá em cima, que é a única fonte. */
+				/* ---- tokens lidos do CSS ------------------------------------------
+     Nada de cor, tipo ou tempo e redigitado aqui: tudo sai do :root la em
+     cima, que e a unica fonte. Uma copia a mao dessincroniza sem avisar. */
 				var raiz = getComputedStyle(document.documentElement);
 				function token(nome) {
 					return raiz.getPropertyValue(nome).trim();
@@ -664,15 +676,17 @@
 					var p = m.split('-');
 					return MESES[Number(p[1]) - 1] + '/' + p[0].slice(2);
 				}
-				/* Oito casas de identidade, atribuídas em ordem. Da nona categoria em diante a cauda vira uma
-				   fatia "Outras" cinza. */
+				/* Oito casas de identidade, atribuidas em ordem. Da nona em diante a cauda vira
+     uma fatia "Outras" cinza: ciclar a paleta daria a mesma cor a duas categorias. */
 				var CASAS = T.serie.length;
 
 				function comCores(cats) {
 					var lista = cats;
 					if (cats.length > CASAS) {
-						var cauda = cats.slice(CASAS - 1);
-						lista = cats.slice(0, CASAS - 1);
+						// A fatia "Outras" tem cor propria (T.outras), entao as oito casas ficam todas
+						// para categorias.
+						var cauda = cats.slice(CASAS);
+						lista = cats.slice(0, CASAS);
 						lista.push({
 							category: 'Outras (' + cauda.length + ')',
 							budget_cents: null,
@@ -706,10 +720,10 @@
 				);
 
 				var meses = []; /* [{month, total_cents, n}] em ordem crescente */
-				var indice = -1; /* posição atual dentro de `meses`              */
+				var indice = -1; /* posicao atual dentro de `meses`              */
 				var graficos = {};
-				var geracao = 0; /* token de requisição: só a mais nova pinta    */
-				var bases = {}; /* resumo dos meses já lidos, base de comparação */
+				var geracao = 0; /* token de requisicao: so a mais nova pinta    */
+				var bases = {}; /* resumo dos meses ja lidos, base de comparacao */
 
 				/* ---- ciclo de carregamento ---------------------------------------- */
 
@@ -742,8 +756,9 @@
 
 				function api(rota) {
 					return fetch(rota).then(function (r) {
-						/* Checa o tipo antes de parsear. Com o Cloudflare Access na frente, sessao expirada nao
-						   devolve 401 com JSON: */
+						/* Checa o tipo antes de parsear: com o Access na frente, sessao expirada devolve a
+       pagina de login e o fetch segue o redirect, entao r.ok e true e o corpo e HTML.
+       Erro legitimo da API continua vindo como {error} e cai no throw de baixo. */
 						if ((r.headers.get('content-type') || '').indexOf('application/json') === -1) {
 							throw new Error('a sessão expirou — recarregue a página para entrar de novo.');
 						}
@@ -754,7 +769,8 @@
 					});
 				}
 
-				/* Guarda o resumo do mês. */
+				/* Guarda o resumo do mes, sem os lancamentos. Andar pro mes vizinho serve a base
+     da memoria em vez de pedir de novo. */
 				function guardaBase(corpo) {
 					bases[corpo.month] = {
 						month: corpo.month,
@@ -774,7 +790,8 @@
 						});
 				}
 
-				/* Isola cada painel. Antes, os cinco desenhos rodavam nus dentro do mesmo `.then`. */
+				/* Isola cada painel: um desenho que lance nao pode levar junto os seguintes nem
+     deixar o painel preso no esqueleto. */
 				function pinta(caixa, fn) {
 					try {
 						fn();
@@ -787,7 +804,7 @@
 					}
 				}
 
-				/* ---- gráficos ------------------------------------------------------ */
+				/* ---- graficos ------------------------------------------------------ */
 
 				if (window.Chart) {
 					Chart.defaults.font.family = T.mono;
@@ -806,16 +823,16 @@
 					el[caixa].innerHTML = '<canvas></canvas>';
 					var c = new Chart(el[caixa].firstChild, config);
 					graficos[caixa] = c;
-					/* O container trocou de conteúdo duas vezes na mesma tarefa (esqueleto, depois canvas). Remede
-					   no frame seguinte, quando o layout já assentou. */
+					/* O container trocou de conteudo duas vezes na mesma tarefa (esqueleto,
+       depois canvas). Remede no frame seguinte, quando o layout ja assentou. */
 					requestAnimationFrame(function () {
 						if (graficos[caixa] === c) c.resize();
 					});
 					return c;
 				}
 
-				/* Fábricas, não constantes: o Chart.js recebe estes objetos por referência e dois gráficos não
-				   devem compartilhar a mesma config de escala. */
+				/* Fabricas, nao constantes: o Chart.js recebe estes objetos por referencia e
+     dois graficos nao devem compartilhar a mesma config de escala. */
 				function eixoLimpo() {
 					return { grid: { display: false }, border: { display: false } };
 				}
@@ -920,7 +937,8 @@
 				}
 
 				function pintaDelta(mes, anterior, semBase) {
-					/* Único painel que depende de um segundo mês. Quando essa leitura cai, o recado é daqui: */
+					/* Unico painel que depende de um segundo mes, entao o recado da falha e daqui: o
+       mes aberto foi lido e nao tem culpa. */
 					if (semBase) {
 						el.deltaBox.innerHTML = '<p class="msg" data-tone="error">Não foi possível ler ' + rotulo(semBase) + ' para comparar.</p>';
 						return;
@@ -929,8 +947,8 @@
 					var atuais = (mes && mes.categories) || [];
 					var antes = (anterior && anterior.categories) || [];
 
-					/* Object.create(null) e não {}: nomes de categoria vêm do bot, e um "constructor" ou
-					   "toString" faria `mapa[k] || 0` devolver uma função. */
+					/* Object.create(null) e nao {}: nomes de categoria vem do bot, e um
+       "constructor" ou "toString" faria `mapa[k] || 0` devolver uma funcao. */
 					var mapa = Object.create(null);
 					antes.forEach(function (c) {
 						mapa[c.category] = -(c.total_cents || 0);
@@ -953,8 +971,8 @@
 						.reverse();
 
 					if (!linhas.length) {
-						/* "Nada mudou" e "não há com o que comparar" são estados diferentes e precisam de textos
-						   diferentes: juntos, ambos parecem falha de carga. */
+						/* "Nada mudou" e "nao ha com o que comparar" sao estados diferentes e
+         precisam de textos diferentes: juntos, ambos parecem falha de carga. */
 						el.deltaBox.innerHTML =
 							'<p class="msg">' +
 							(anterior ? 'Nada mudou em relação a ' + rotulo(anterior.month) + '.' : 'Sem mês anterior para comparar.') +
@@ -1001,8 +1019,8 @@
 				}
 
 				function pintaLinha(atual) {
-					/* Janela ancorada no mes aberto, nao na cauda de `meses`: desde a 0008 a cauda pode ser 23
-					   meses de parcela futura, e ai o ponto de "voce esta aqui" ficava fora do grafico. */
+					/* Janela ancorada no mes aberto e nao na cauda de `meses`: desde a 0008 a cauda
+					   pode ser 23 meses de parcela futura, e o mes aberto sairia do grafico. */
 					var fim = meses.findIndex(function (m) {
 						return m.month === atual;
 					});
@@ -1025,8 +1043,8 @@
 									pointRadius: janela.map(function (m) {
 										return m.month === atual ? 5 : 3;
 									}),
-									/* O mês aberto é destacado com tinta, não com o vermelho de "subiu": ali ele significaria
-									   alta, e significa só "você está aqui". */
+									/* O mes aberto e destacado com tinta, nao com o vermelho de "subiu":
+             ali ele significaria alta, e significa so "voce esta aqui". */
 									pointBackgroundColor: janela.map(function (m) {
 										return m.month === atual ? T.ink : T.mark;
 									}),
@@ -1091,8 +1109,8 @@
 						})
 						.join('');
 
-					/* O aviso de corte: a API manda `truncated` quando o mes tem mais lancamentos que o
-					   LIMITE_LANCAMENTOS dela. */
+					/* A API manda `truncated` quando o mes tem mais lancamentos que o limite dela: o
+					   subtitulo conta o mes inteiro e a lista para em 300. */
 					var corte = mes.truncated ? '<p class="msg">Mostrando os ' + lista.length + ' mais recentes de ' + mes.n + '.</p>' : '';
 
 					el.table.innerHTML =
@@ -1107,17 +1125,17 @@
 						corte;
 				}
 
-				/* ---- navegação ----------------------------------------------------- */
+				/* ---- navegacao ----------------------------------------------------- */
 
 				function vaiPara(i) {
 					if (i < 0 || i >= meses.length) return Promise.resolve();
 
-					var meu = ++geracao; /* qualquer resposta anterior a esta é descartada */
+					var meu = ++geracao; /* qualquer resposta anterior a esta e descartada */
 					indice = i;
 					var m = meses[i].month;
 					var mesBase = mesVizinho(m, -1);
-					/* Só pede o mês anterior se a lista disser que ele tem registro. Sem isso, toda troca gastava
-					   uma ida ao banco para receber zero de volta. */
+					/* So pede o mes anterior se a lista disser que ele tem registro. Sem isso,
+       toda troca gastava uma ida ao banco para receber zero de volta. */
 					var temBase = meses.some(function (x) {
 						return x.month === mesBase;
 					});
@@ -1126,7 +1144,8 @@
 					ocupado(true);
 					esqueleto();
 
-					/* A comparação corre separada e pode cair sozinha. */
+					/* A comparacao corre separada e pode cair sozinha: no mesmo Promise.all do mes
+       aberto, uma falha nela derrubaria a pagina inteira. */
 					var falhouBase = false;
 					var base = temBase
 						? leBase(mesBase).catch(function () {
@@ -1213,8 +1232,10 @@
 							.join('');
 
 						revela();
-						/* Nao e mais `meses.length - 1`: desde a migration 0008 as parcelas 2..N gravam linha em
-						   meses que ainda nao aconteceram, entao a cauda da lista deixou de ser o mes corrente. */
+						/* O ultimo mes <= hoje, e nao a cauda da lista: desde a 0008 as parcelas 2..N
+						   gravam linha em meses que ainda nao aconteceram. As setas continuam alcancando
+						   o futuro, so nao e a tela de entrada. Fuso de SP e nao UTC, senao nas ultimas
+						   horas do dia 31 a pagina abre num mes futuro. */
 						var hojeYM = new Intl.DateTimeFormat('en-CA', {
 							timeZone: 'America/Sao_Paulo',
 							year: 'numeric',
