@@ -1,4 +1,4 @@
-# osiris
+# Osiris
 
 Um controle de gastos pessoais que mora dentro do Telegram.
 
