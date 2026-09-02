@@ -12,3 +12,6 @@ node_modules/
 *.sql
 !migrations/*.sql
 osiris-*.json
+
+# runbook interno: descreve a infra e onde ela e fragil
+OPERACAO.md
